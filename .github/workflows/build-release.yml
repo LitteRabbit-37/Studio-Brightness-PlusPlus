@@ -12,7 +12,7 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
               with:
-                  persist-credentials: false
+                  persist-credentials: true
 
             - uses: ilammy/msvc-dev-cmd@v1
             - name: Build
