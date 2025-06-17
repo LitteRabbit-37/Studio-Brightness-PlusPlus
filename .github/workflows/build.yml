@@ -1,0 +1,29 @@
+name: Build each commit
+
+on:
+  push:
+
+jobs:
+
+  build-bat:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+  build-cmake:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build
+        run: cmake --build build
