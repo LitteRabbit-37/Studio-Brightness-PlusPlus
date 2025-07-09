@@ -136,7 +136,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
                         const BYTE* report = hid.bRawData + i * hid.dwSizeHid;
                         if (hid.dwSizeHid >= 3) {
                             USHORT usage = report[1] | (report[2] << 8);
-                            ULONG steps = 16;
+                            ULONG steps = 10;
                             ULONG step = (maxBrightness - minBrightness) / steps;
                             if (step < 1) step = 1;
 
@@ -281,7 +281,6 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
     baseBrightness = previousUserBrightness = currentBrightness;
     baseLux = getAmbientLux();
 
-    // ----------- AJOUTER L'ENREGISTREMENT RAW INPUT ICI -------------
     RAWINPUTDEVICE rid;
     rid.usUsagePage = 0x0C; // Consumer Page
     rid.usUsage     = 0x01; // Consumer Control

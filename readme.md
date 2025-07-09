@@ -55,7 +55,7 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 ## Technical notes
 
 -   The file **`hid.cpp`** was rewritten to more reliably detect the Apple Studio Display (VID 05ac / PID 1114). The detection logic may differ from the original upstream.
--   Brightness levels are split into **16 steps** (to match the macOS experience, but the windows slider is not synchronised sadly).
+-   Brightness levels are split into **10 steps** (to match the windows slider but sadly it is not yet synchronised).
 -   Brightness key events are captured through HID RawInput (Consumer Control page), making this compatible with Apple, Windows, and QMK/VIA keyboards with proper key assignments.
 
 ## Known limitations
