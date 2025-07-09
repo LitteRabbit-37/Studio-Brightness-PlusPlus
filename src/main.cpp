@@ -14,8 +14,6 @@
 #include <chrono>
 #include <algorithm>
 #include <vector>
-#include <dwmapi.h> // for layered attributes
-#pragma comment(lib,"dwmapi.lib")
 #include "resource.h"
 #include "hid.h"
 
@@ -43,24 +41,9 @@ static ULONG  previousUserBrightness = 30000;
 static ULONG  minBrightness = 1000;
 static ULONG  maxBrightness = 60000;
 
-/* ---------- répétition touche luminosité ---------- */
-static const UINT TIMER_ID_BRIGHTNESS_REPEAT = 1; // ID du timer pour l’auto-repeat
-static bool      g_repeatActive  = false;         // Indique si un appui est maintenu
-static USHORT    g_repeatUsage   = 0;             // 0x006F (up) ou 0x0070 (down)
-
-/* ---------- fenêtre OSD slider ---------- */
-static HWND   g_hSlider              = nullptr;
-static const UINT TIMER_ID_SLIDER_HIDE = 3;
-static const UINT SLIDER_HIDE_DELAY_MS = 1500;
-static int    g_sliderValue          = 0; // 0-100%
-
-void ShowSlider();
-
-
 /* ---------- prototypes ---------- */
 void detectBrightnessRange();   // définition plus bas
 float getAmbientLux();
-void CreateSliderWindow();
 
 /* ---------- systray helpers ---------- */
 BOOL AddNotificationIcon(HWND h)
@@ -137,78 +120,6 @@ void updateUserReferenceIfChanged()
     }
 }
 
-/* ---------- helpers OSD ---------- */
-LRESULT CALLBACK SliderWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
-{
-    switch (m) {
-    case WM_PAINT: {
-        PAINTSTRUCT ps; HDC hdc = BeginPaint(h, &ps);
-        RECT rc; GetClientRect(h, &rc);
-        // fond gris sombre
-        HBRUSH hBg = CreateSolidBrush(RGB(60, 60, 60));
-        FillRect(hdc, &rc, hBg); DeleteObject(hBg);
-        // barre blanche (ou bleue ?)
-        RECT fill = rc;
-        fill.right = rc.left + (LONG)((rc.right - rc.left) * g_sliderValue / 100.0);
-        HBRUSH hFg = CreateSolidBrush(RGB(250, 250, 250));
-        FillRect(hdc, &fill, hFg); DeleteObject(hFg);
-        EndPaint(h, &ps);
-        return 0;
-    }
-    case WM_TIMER:
-        if (wParam == TIMER_ID_SLIDER_HIDE) {
-            ShowWindow(h, SW_HIDE);
-            KillTimer(h, TIMER_ID_SLIDER_HIDE);
-            return 0;
-        }
-        break;
-    }
-    return DefWindowProc(h, m, wParam, lParam);
-}
-
-void CreateSliderWindow()
-{
-    WNDCLASSEXW wc{ sizeof(wc) };
-    wc.lpfnWndProc   = SliderWndProc;
-    wc.hInstance     = g_hInst;
-    wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.lpszClassName = L"StudioBrightnessSliderClass";
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClassExW(&wc);
-
-    g_hSlider = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        wc.lpszClassName, L"", WS_POPUP,
-        0, 0, 10, 10, nullptr, nullptr, g_hInst, nullptr);
-
-    // alpha 220/255 (~86 %)
-    SetLayeredWindowAttributes(g_hSlider, 0, 220, LWA_ALPHA);
-    ShowWindow(g_hSlider, SW_HIDE);
-}
-
-void ShowSlider()
-{
-    if (!g_hSlider) return;
-    // convert brightness to 0-100
-    if (maxBrightness > minBrightness) {
-        g_sliderValue = (int)((currentBrightness - minBrightness) * 100.0 / (maxBrightness - minBrightness));
-        g_sliderValue = std::clamp(g_sliderValue, 0, 100);
-    }
-    // ---------- positionnement OSD ----------
-    // Modifiez width/height ou le calcul de x/y pour ajuster la taille/position.
-    const int width = 300, height = 24;           // <- largeur/hauteur du slider
-    int sx = GetSystemMetrics(SM_CXSCREEN);
-    int sy = GetSystemMetrics(SM_CYSCREEN);
-    int x  = (sx - width) / 2;                    // centré horizontalement
-    int y  = sy - height - 110;                    // 110 px au-dessus du bas
-
-    // Affiche puis amène au sommet de la bande TOPMOST (au-dessus de l’OSD Windows)
-    ShowWindow(g_hSlider, SW_SHOWNOACTIVATE);
-    SetWindowPos(g_hSlider, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-
-    InvalidateRect(g_hSlider, nullptr, TRUE);
-    SetTimer(g_hSlider, TIMER_ID_SLIDER_HIDE, SLIDER_HIDE_DELAY_MS, nullptr);
-}
-
 /* ---------- fenêtre fantôme & WndProc ---------- */
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
 {
@@ -246,24 +157,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
                                 baseBrightness = newBrightness;
                                 currentBrightness = newBrightness;
                                 previousUserBrightness = newBrightness;
-                                ShowSlider();
                                 // Ne recale la référence que si PAS en butée
                                 if (newBrightness != minBrightness && newBrightness != maxBrightness) {
                                     baseLux = getAmbientLux();
                                 }
-                            }
-                            // ---------- gestion du maintien de la touche ----------
-                            if (usage == 0x006F || usage == 0x0070) {
-                                // Démarre ou met à jour le timer si différent
-                                if (!g_repeatActive || g_repeatUsage != usage) {
-                                    g_repeatUsage  = usage;
-                                    g_repeatActive = true;
-                                    SetTimer(h, TIMER_ID_BRIGHTNESS_REPEAT, 80, nullptr); // ~12 Hz
-                                }
-                            } else if (g_repeatActive) {
-                                // Relâchement de la touche
-                                KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
-                                g_repeatActive = false;
                             }
                         }
                     }
@@ -272,41 +169,6 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     }
-    if (m == WM_TIMER && wParam == TIMER_ID_BRIGHTNESS_REPEAT) {
-        // ---------- répétition automatique ----------
-        ULONG steps = 16;
-        ULONG step  = (maxBrightness - minBrightness) / steps;
-        if (step < 1) step = 1;
-
-        ULONG newBrightness = currentBrightness;
-        if (g_repeatUsage == 0x006F) { // Brightness Up
-            if (currentBrightness < maxBrightness) {
-                ULONG actualStep = std::min(step, maxBrightness - currentBrightness);
-                newBrightness = currentBrightness + actualStep;
-            }
-        } else if (g_repeatUsage == 0x0070) { // Brightness Down
-            if (currentBrightness > minBrightness) {
-                ULONG actualStep = std::min(step, currentBrightness - minBrightness);
-                newBrightness = currentBrightness - actualStep;
-            }
-        }
-        if (newBrightness != currentBrightness) {
-            hid_setBrightness(newBrightness);
-            baseBrightness         = newBrightness;
-            currentBrightness      = newBrightness;
-            previousUserBrightness = newBrightness;
-            ShowSlider();
-            if (newBrightness != minBrightness && newBrightness != maxBrightness) {
-                baseLux = getAmbientLux();
-            }
-        } else {
-            // Arrêt si l’on atteint la butée
-            KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
-            g_repeatActive = false;
-        }
-        return 0;
-    }
-
     if (m == WMAPP_NOTIFYCALLBACK) {
         if (LOWORD(lParam) == WM_RBUTTONUP) {
             HMENU hMenu = CreatePopupMenu();
@@ -322,7 +184,6 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
         }
     }
     if (m==WM_DESTROY) {
-        if (g_repeatActive) KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
         hid_deinit();
         DeleteNotificationIcon();
         PostQuitMessage(0);
@@ -414,7 +275,6 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
         return 1;
     }
     ShowWindow(h,SW_HIDE);           // fenêtre invisible
-    CreateSliderWindow();
 
     detectBrightnessRange();
     hid_getBrightness(&currentBrightness);

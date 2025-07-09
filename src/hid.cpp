@@ -116,7 +116,7 @@ int hid_init()
 }
 
 /* ============================================================ */
-/* --- GET / SET / RANGE identiques à ta version ------------  */
+/* -------------------- GET / SET / RANGE  -------------------  */
 int hid_getBrightness(ULONG* val)
 {
     if (hDev == INVALID_HANDLE_VALUE) return -1;
