@@ -41,6 +41,12 @@ static ULONG  previousUserBrightness = 30000;
 static ULONG  minBrightness = 1000;
 static ULONG  maxBrightness = 60000;
 
+/* ---------- répétition touche luminosité ---------- */
+static const UINT TIMER_ID_BRIGHTNESS_REPEAT = 1; // ID du timer pour l’auto-repeat
+static bool      g_repeatActive  = false;         // Indique si un appui est maintenu
+static USHORT    g_repeatUsage   = 0;             // 0x006F (up) ou 0x0070 (down)
+
+
 /* ---------- prototypes ---------- */
 void detectBrightnessRange();   // définition plus bas
 float getAmbientLux();
@@ -162,6 +168,19 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
                                     baseLux = getAmbientLux();
                                 }
                             }
+                            // ---------- gestion du maintien de la touche ----------
+                            if (usage == 0x006F || usage == 0x0070) {
+                                // Démarre ou met à jour le timer si différent
+                                if (!g_repeatActive || g_repeatUsage != usage) {
+                                    g_repeatUsage  = usage;
+                                    g_repeatActive = true;
+                                    SetTimer(h, TIMER_ID_BRIGHTNESS_REPEAT, 80, nullptr); // ~12 Hz
+                                }
+                            } else if (g_repeatActive) {
+                                // Relâchement de la touche
+                                KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
+                                g_repeatActive = false;
+                            }
                         }
                     }
                 }
@@ -169,6 +188,40 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     }
+    if (m == WM_TIMER && wParam == TIMER_ID_BRIGHTNESS_REPEAT) {
+        // ---------- répétition automatique ----------
+        ULONG steps = 10;
+        ULONG step  = (maxBrightness - minBrightness) / steps;
+        if (step < 1) step = 1;
+
+        ULONG newBrightness = currentBrightness;
+        if (g_repeatUsage == 0x006F) { // Brightness Up
+            if (currentBrightness < maxBrightness) {
+                ULONG actualStep = std::min(step, maxBrightness - currentBrightness);
+                newBrightness = currentBrightness + actualStep;
+            }
+        } else if (g_repeatUsage == 0x0070) { // Brightness Down
+            if (currentBrightness > minBrightness) {
+                ULONG actualStep = std::min(step, currentBrightness - minBrightness);
+                newBrightness = currentBrightness - actualStep;
+            }
+        }
+        if (newBrightness != currentBrightness) {
+            hid_setBrightness(newBrightness);
+            baseBrightness         = newBrightness;
+            currentBrightness      = newBrightness;
+            previousUserBrightness = newBrightness;
+            if (newBrightness != minBrightness && newBrightness != maxBrightness) {
+                baseLux = getAmbientLux();
+            }
+        } else {
+            // Arrêt si l’on atteint la butée
+            KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
+            g_repeatActive = false;
+        }
+        return 0;
+    }
+
     if (m == WMAPP_NOTIFYCALLBACK) {
         if (LOWORD(lParam) == WM_RBUTTONUP) {
             HMENU hMenu = CreatePopupMenu();
@@ -184,6 +237,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
         }
     }
     if (m==WM_DESTROY) {
+        if (g_repeatActive) KillTimer(h, TIMER_ID_BRIGHTNESS_REPEAT);
         hid_deinit();
         DeleteNotificationIcon();
         PostQuitMessage(0);
@@ -214,13 +268,28 @@ bool RegisterHiddenClass()
 /* ---------- worker ---------- */
 void startWorker()
 {
-    std::thread([]{
-        for(;;){
+    std::thread([] {
+        for (;;) {
+            /* ---------- tentative de (re)connexion ---------- */
+            {
+                ULONG tmp;
+                if (hid_getBrightness(&tmp) != 0) {
+                    hid_deinit();                      // ferme proprement l‘ancien handle
+                    if (hid_init() == 0) {             // nouvel essai de connexion
+                        detectBrightnessRange();
+                        if (hid_getBrightness(&currentBrightness) == 0) {
+                            baseBrightness = previousUserBrightness = currentBrightness;
+                            baseLux = getAmbientLux();
+                        }
+                    }
+                }
+            }
+
             ULONG tgt = mapLuxToBrightness(getAmbientLux());
             long diff = (long)tgt - (long)currentBrightness;
-            if(diff){
-                long step = std::max((long)(maxBrightness*0.02f),500L);
-                long delta= std::clamp(diff,-step,step);
+            if (diff) {
+                long step  = std::max((long)(maxBrightness * 0.02f), 500L);
+                long delta = std::clamp(diff, -step, step);
                 currentBrightness += delta;
                 hid_setBrightness(currentBrightness);
             }

@@ -45,16 +45,6 @@ build.bat
 
 The output will be `bin\studio-brightness-plusplus.exe`.
 
-### Using CMake
-
-1. Open a terminal in the project directory
-2. Run:
-
-```bash
-cmake -B bin
-cmake --build bin
-```
-
 ## Usage
 
 -   **Increase brightness:** Use your keyboard’s native brightness up key (the sun/F2 key, or your QMK/VIA-assigned key)
@@ -65,7 +55,7 @@ cmake --build bin
 ## Technical notes
 
 -   The file **`hid.cpp`** was rewritten to more reliably detect the Apple Studio Display (VID 05ac / PID 1114). The detection logic may differ from the original upstream.
--   Brightness levels are split into **16 steps** (to match the Apple/macOS experience).
+-   Brightness levels are split into **16 steps** (to match the macOS experience, but the windows slider is not synchronised sadly).
 -   Brightness key events are captured through HID RawInput (Consumer Control page), making this compatible with Apple, Windows, and QMK/VIA keyboards with proper key assignments.
 
 ## Known limitations
