@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="studio-brightness-plusplus.ico" />
+</p>
+
 # Studio brightness ++
 
 > **Note: This project is a fork and extension of [studio-brightness](https://github.com/sfjohnson/studio-brightness) by Sam Johnson (sfjohnson).**
