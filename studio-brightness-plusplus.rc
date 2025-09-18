@@ -1,3 +1,23 @@
+#include <windows.h>
 #include "resource.h"
 
 IDI_MYICON ICON "studio-brightness-plusplus.ico"
+
+IDD_OPTIONS DIALOGEX 0, 0, 260, 150
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Options"
+FONT 9, "Segoe UI"
+BEGIN
+    CONTROL "Enable automatic brightness", IDC_AUTO_BRIGHTNESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 8, 180, 12
+    CONTROL "Enable custom shortcuts",  IDC_ENABLE_HOTKEYS,   "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 28, 180, 12
+
+    GROUPBOX "Shortcuts", -1, 6, 44, 248, 68
+    LTEXT   "Increase:", -1, 14, 60, 44, 10
+    CONTROL "", IDC_HOTKEY_UP,   "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 58, 168, 14
+    LTEXT   "Decrease:", -1, 14, 80, 44, 10
+    CONTROL "", IDC_HOTKEY_DOWN, "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 78, 168, 14
+
+    PUSHBUTTON "Reset to Defaults", IDC_RESET_SHORTCUTS, 8, 118, 100, 14
+    DEFPUSHBUTTON "Save",     IDOK,     148, 118, 48, 14
+    PUSHBUTTON    "Cancel", IDCANCEL, 202, 118, 48, 14
+END

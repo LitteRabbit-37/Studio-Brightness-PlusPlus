@@ -10,7 +10,7 @@
 
 **Studio brightness ++** is a small Windows utility for controlling the brightness of an Apple Studio Display:
 
--   **Automatic brightness adjustment** based on ambient light (if your system has a compatible ALS sensor)
+-   **Automatic brightness adjustment** based on ambient light (based on ALS sensor)
 -   **Manual brightness control** via the native keyboard brightness keys (the “sun” keys, Fn+F1/F2, or QMK/VIA custom keys)
 -   Runs in the system tray, lightweight and easy to use
 
@@ -18,10 +18,10 @@
 
 Compared to the original, this fork adds:
 
--   **Automatic brightness:** Adjusts your Studio Display’s brightness to match the ambient light in your room
--   **Native brightness key support:** Use your keyboard’s built-in brightness up/down keys, just like on macOS
--   **16-level brightness scale:** Matches the macOS/Apple standard for number of brightness steps between minimum and maximum
--   **Revised Studio Display detection** (`hid.cpp` has been rewritten for more robust device matching)
+-   **Automatic brightness (ALS)** with a built‑in deadband/hysteresis to avoid micro‑adjustments for tiny room‑light changes. You can toggle this from the tray.
+-   **Native brightness key support** (sun/F1–F2, or your QMK/VIA keys).
+-   **Custom global shortcuts** via an Options dialog (tray menu). Includes a "Reset to Defaults" that reverts to the native Windows brightness keys only.
+-   **Revised Studio Display detection** (`hid.cpp` rewritten) for more robust device matching.
 
 ## Credits
 
@@ -39,7 +39,7 @@ Compared to the original, this fork adds:
 
 ### Using build.bat
 
-1. Open a **Developer Command Prompt for VS**
+1. Open a **x64 Developer Command Prompt for VS**
 2. Go to the project directory
 3. Run:
 
@@ -51,22 +51,25 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 
 ## Usage
 
--   **Increase brightness:** Use your keyboard’s native brightness up key (the sun/F2 key, or your QMK/VIA-assigned key)
--   **Decrease brightness:** Use your keyboard’s brightness down key (the sun/F1 key, or your QMK/VIA-assigned key)
--   **Automatic brightness:** If you have a Windows-compatible ambient light sensor, the display will auto-adjust as lighting changes
--   **Quit:** Right-click the tray icon and select “Quit”
+-   **Increase brightness:** Use your keyboard’s native brightness up key (sun/F2) or a custom shortcut (if enabled in Options).
+-   **Decrease brightness:** Use your keyboard’s native brightness down key (sun/F1) or a custom shortcut (if enabled).
+-   **Automatic brightness:** If you have a compatible ambient light sensor, the app auto‑adjusts brightness. Right‑click the tray icon to toggle “Automatic Brightness”.
+-   **Options…:** Right‑click the tray icon → “Options…”. Enable custom shortcuts, set Increase/Decrease keys, or click “Reset to Defaults” to rely only on the native Windows brightness keys.
+-   **Quit:** Right‑click the tray icon and select “Quit”.
 
 ## Technical notes
 
 -   The file **`hid.cpp`** was rewritten to more reliably detect the Apple Studio Display (VID 05ac / PID 1114). The detection logic may differ from the original upstream.
--   Brightness levels are split into **10 steps** (to match the windows slider but sadly it is not yet synchronised).
--   Brightness key events are captured through HID RawInput (Consumer Control page), making this compatible with Apple, Windows, and QMK/VIA keyboards with proper key assignments.
+-   Brightness step changes default to **10 steps** across the detected brightness range.
+-   ALS auto‑adjust uses a deadband to prevent flicker: max(≈3% of device range, a small absolute floor) and smooths toward target in small increments.
+-   Brightness key events are captured via HID RawInput (Consumer Control page). Optional custom global hotkeys are registered with `RegisterHotKey`.
 
 ## Known limitations
 
--   If no ambient light sensor is present or accessible, only manual brightness control is available.
+-   If no ambient light sensor is present or accessible(ALS sensor), only manual brightness control is available.
 -   Only tested with official Apple Studio Display. Other Apple monitors are not supported.
 -   The application does **not** adjust color temperature or other display parameters.
+-   Options (auto‑brightness toggle and custom shortcuts) are session‑only and not persisted across restarts.
 
 ---
 

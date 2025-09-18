@@ -14,6 +14,7 @@
 #include <chrono>
 #include <algorithm>
 #include <vector>
+#include <atomic>
 #include "resource.h"
 #include "hid.h"
 
@@ -26,6 +27,7 @@ using Microsoft::WRL::ComPtr;
 
 /* ---------- globals ---------- */
 static HINSTANCE g_hInst = nullptr;
+static HWND      g_hMain = nullptr;
 constexpr UINT   WMAPP_NOTIFYCALLBACK = WM_APP + 1;
 constexpr wchar_t kWndClass[] = L"StudioBrightnessClass";
 
@@ -41,9 +43,40 @@ static ULONG  previousUserBrightness = 30000;
 static ULONG  minBrightness = 1000;
 static ULONG  maxBrightness = 60000;
 
+// Auto-adjust control & deadband
+static std::atomic<bool> g_autoAdjustEnabled{ true };
+static long computeDeadband()
+{
+    long range = (long)std::max<ULONG>(1, maxBrightness - minBrightness);
+    long byPct = (long)std::max(1L, (long)(range * 0.03f));     // 3% of range
+    long minAbs = 1500L;                                        // absolute floor
+    return std::max(byPct, minAbs);
+}
+
+// Custom hotkeys
+struct HotkeySpec { UINT mods; UINT vk; };
+static bool       g_enableCustomHotkeys = false;
+static HotkeySpec g_hkUp{ 0,0 }, g_hkDown{ 0,0 };
+
+static void unregisterHotkeys(HWND h)
+{
+    UnregisterHotKey(h, ID_HOTKEY_UP);
+    UnregisterHotKey(h, ID_HOTKEY_DOWN);
+}
+static bool registerHotkeys(HWND h)
+{
+    unregisterHotkeys(h);
+    if (!g_enableCustomHotkeys) return true;
+    bool ok = true;
+    if (g_hkUp.vk)   ok = ok && RegisterHotKey(h, ID_HOTKEY_UP,   g_hkUp.mods,   g_hkUp.vk);
+    if (g_hkDown.vk) ok = ok && RegisterHotKey(h, ID_HOTKEY_DOWN, g_hkDown.mods, g_hkDown.vk);
+    return ok;
+}
+
 /* ---------- prototypes ---------- */
 void detectBrightnessRange();   // définition plus bas
 float getAmbientLux();
+INT_PTR CALLBACK OptionsDlgProc(HWND, UINT, WPARAM, LPARAM);
 
 /* ---------- systray helpers ---------- */
 BOOL AddNotificationIcon(HWND h)
@@ -120,9 +153,116 @@ void updateUserReferenceIfChanged()
     }
 }
 
+/* ---------- helpers: brightness step ---------- */
+void adjustBrightnessByStep(int direction)
+{
+    ULONG steps = 10;
+    ULONG step = (maxBrightness - minBrightness) / steps;
+    if (step < 1) step = 1;
+
+    ULONG newBrightness = currentBrightness;
+    if (direction > 0) {
+        if (currentBrightness < maxBrightness) {
+            ULONG actualStep = std::min(step, maxBrightness - currentBrightness);
+            newBrightness = currentBrightness + actualStep;
+        }
+    } else if (direction < 0) {
+        if (currentBrightness > minBrightness) {
+            ULONG actualStep = std::min(step, currentBrightness - minBrightness);
+            newBrightness = currentBrightness - actualStep;
+        }
+    }
+    if (newBrightness != currentBrightness) {
+        hid_setBrightness(newBrightness);
+        baseBrightness = newBrightness;
+        currentBrightness = newBrightness;
+        previousUserBrightness = newBrightness;
+        if (newBrightness != minBrightness && newBrightness != maxBrightness) {
+            baseLux = getAmbientLux();
+        }
+    }
+}
+
+/* ---------- Options Dialog ---------- */
+static void setDlgHotkey(HWND d, int ctrlId, const HotkeySpec& hk)
+{
+    BYTE f = 0;
+    if (hk.mods & MOD_CONTROL) f |= HOTKEYF_CONTROL;
+    if (hk.mods & MOD_SHIFT)   f |= HOTKEYF_SHIFT;
+    if (hk.mods & MOD_ALT)     f |= HOTKEYF_ALT;
+    WORD w = MAKEWORD((BYTE)hk.vk, f);
+    SendDlgItemMessageW(d, ctrlId, HKM_SETHOTKEY, w, 0);
+}
+static void getDlgHotkey(HWND d, int ctrlId, HotkeySpec& out)
+{
+    WORD w = (WORD)SendDlgItemMessageW(d, ctrlId, HKM_GETHOTKEY, 0, 0);
+    UINT vk = LOBYTE(w);
+    BYTE f  = HIBYTE(w);
+    UINT mods = 0;
+    if (f & HOTKEYF_CONTROL) mods |= MOD_CONTROL;
+    if (f & HOTKEYF_SHIFT)   mods |= MOD_SHIFT;
+    if (f & HOTKEYF_ALT)     mods |= MOD_ALT;
+    out = { mods, vk };
+}
+
+INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp)
+{
+    UNREFERENCED_PARAMETER(lp);
+    switch (msg) {
+    case WM_INITDIALOG: {
+        CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
+        EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP),   g_enableCustomHotkeys);
+        EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), g_enableCustomHotkeys);
+        setDlgHotkey(d, IDC_HOTKEY_UP,   g_hkUp);
+        setDlgHotkey(d, IDC_HOTKEY_DOWN, g_hkDown);
+        return TRUE;
+    }
+    case WM_COMMAND: {
+        WORD id = LOWORD(wp); WORD code = HIWORD(wp);
+        if (id == IDC_ENABLE_HOTKEYS && code == BN_CLICKED) {
+            BOOL en = IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED;
+            EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP),   en);
+            EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), en);
+            return TRUE;
+        }
+        if (id == IDC_RESET_SHORTCUTS && code == BN_CLICKED) {
+            CheckDlgButton(d, IDC_ENABLE_HOTKEYS, BST_UNCHECKED);
+            EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP),   FALSE);
+            EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), FALSE);
+            SendDlgItemMessageW(d, IDC_HOTKEY_UP,   HKM_SETHOTKEY, 0, 0);
+            SendDlgItemMessageW(d, IDC_HOTKEY_DOWN, HKM_SETHOTKEY, 0, 0);
+            return TRUE;
+        }
+        if (id == IDOK) {
+            g_autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
+            g_enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
+            if (g_enableCustomHotkeys) {
+                getDlgHotkey(d, IDC_HOTKEY_UP,   g_hkUp);
+                getDlgHotkey(d, IDC_HOTKEY_DOWN, g_hkDown);
+            } else {
+                g_hkUp = { 0,0 }; g_hkDown = { 0,0 };
+            }
+            if (!registerHotkeys(g_hMain)) {
+                MessageBoxW(d, L"Failed to register one or more hotkeys.", L"StudioBrightnessPlusPlus", MB_ICONERROR);
+            }
+            EndDialog(d, IDOK);
+            return TRUE;
+        }
+        if (id == IDCANCEL) { EndDialog(d, IDCANCEL); return TRUE; }
+        break;
+    }
+    }
+    return FALSE;
+}
+
 /* ---------- fenêtre fantôme & WndProc ---------- */
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
 {
+    if (m == WM_HOTKEY) {
+        if (wParam == ID_HOTKEY_UP)   { adjustBrightnessByStep(+1); return 0; }
+        if (wParam == ID_HOTKEY_DOWN) { adjustBrightnessByStep(-1); return 0; }
+    }
     if (m == WM_INPUT) {
         UINT dwSize = 0;
         GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &dwSize, sizeof(RAWINPUTHEADER));
@@ -136,31 +276,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
                         const BYTE* report = hid.bRawData + i * hid.dwSizeHid;
                         if (hid.dwSizeHid >= 3) {
                             USHORT usage = report[1] | (report[2] << 8);
-                            ULONG steps = 10;
-                            ULONG step = (maxBrightness - minBrightness) / steps;
-                            if (step < 1) step = 1;
-
-                            ULONG newBrightness = currentBrightness;
                             if (usage == 0x006F) { // Brightness Up
-                                if (currentBrightness < maxBrightness) {
-                                    ULONG actualStep = std::min(step, maxBrightness - currentBrightness);
-                                    newBrightness = currentBrightness + actualStep;
-                                }
+                                adjustBrightnessByStep(+1);
                             } else if (usage == 0x0070) { // Brightness Down
-                                if (currentBrightness > minBrightness) {
-                                    ULONG actualStep = std::min(step, currentBrightness - minBrightness);
-                                    newBrightness = currentBrightness - actualStep;
-                                }
-                            }
-                            if (newBrightness != currentBrightness) {
-                                hid_setBrightness(newBrightness);
-                                baseBrightness = newBrightness;
-                                currentBrightness = newBrightness;
-                                previousUserBrightness = newBrightness;
-                                // Ne recale la référence que si PAS en butée
-                                if (newBrightness != minBrightness && newBrightness != maxBrightness) {
-                                    baseLux = getAmbientLux();
-                                }
+                                adjustBrightnessByStep(-1);
                             }
                         }
                     }
@@ -172,12 +291,19 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
     if (m == WMAPP_NOTIFYCALLBACK) {
         if (LOWORD(lParam) == WM_RBUTTONUP) {
             HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, 1, L"Quit");
+            AppendMenuW(hMenu, MF_STRING | (g_autoAdjustEnabled.load() ? MF_CHECKED : 0), IDM_TOGGLE_AUTO, L"Automatic Brightness");
+            AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Quit");
             POINT pt; GetCursorPos(&pt);
             SetForegroundWindow(h);
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, h, nullptr);
             DestroyMenu(hMenu);
-            if (cmd == 1) {
+            if (cmd == IDM_TOGGLE_AUTO) {
+                g_autoAdjustEnabled.store(!g_autoAdjustEnabled.load());
+            } else if (cmd == IDM_OPTIONS) {
+                DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
+            } else if (cmd == IDM_EXIT) {
                 PostMessage(h, WM_CLOSE, 0, 0);
             }
             return 0;
@@ -186,6 +312,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
     if (m==WM_DESTROY) {
         hid_deinit();
         DeleteNotificationIcon();
+        unregisterHotkeys(h);
         PostQuitMessage(0);
         return 0;
     }
@@ -231,13 +358,19 @@ void startWorker()
                 }
             }
 
-            ULONG tgt = mapLuxToBrightness(getAmbientLux());
-            long diff = (long)tgt - (long)currentBrightness;
-            if (diff) {
-                long step  = std::max((long)(maxBrightness * 0.02f), 500L);
-                long delta = std::clamp(diff, -step, step);
-                currentBrightness += delta;
-                hid_setBrightness(currentBrightness);
+            if (g_autoAdjustEnabled.load()) {
+                ULONG tgt = mapLuxToBrightness(getAmbientLux());
+                long diff = (long)tgt - (long)currentBrightness;
+                long db   = computeDeadband();
+                if      (diff >  db) { diff -= db; }
+                else if (diff < -db) { diff += db; }
+                else { diff = 0; }
+                if (diff) {
+                    long step  = std::max((long)((maxBrightness - minBrightness) * 0.02f), 500L);
+                    long delta = std::clamp(diff, -step, step);
+                    currentBrightness += delta;
+                    hid_setBrightness(currentBrightness);
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -255,6 +388,8 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     g_hInst = hInst;
+    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
+    InitCommonControlsEx(&icc);
 
     int hid_res = hid_init();
     if (hid_res < 0 && hid_res != -10) {
@@ -268,7 +403,7 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
     HWND h = CreateWindowW(kWndClass,L"",WS_OVERLAPPEDWINDOW,
                            CW_USEDEFAULT,CW_USEDEFAULT,400,200,
                            nullptr,nullptr,hInst,nullptr);
-    DWORD err = GetLastError();
+    g_hMain = h;
     if (!h){
         wchar_t buf[128]; wsprintf(buf,L"CreateWindowW failed (%lu)",GetLastError());
         MessageBoxW(nullptr,buf,L"StudioBrightnessPlusPlus",MB_ICONERROR|MB_TOPMOST);
@@ -293,6 +428,7 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
     // ---------------------------------------------------------------
 
     AddNotificationIcon(h);
+    registerHotkeys(h);
     startWorker();
 
     MSG msg;
