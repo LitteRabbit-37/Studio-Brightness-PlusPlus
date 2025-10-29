@@ -57,6 +57,7 @@ static long computeDeadband()
 struct HotkeySpec { UINT mods; UINT vk; };
 static bool       g_enableCustomHotkeys = false;
 static HotkeySpec g_hkUp{ 0,0 }, g_hkDown{ 0,0 };
+static bool       g_runAtStartup = false;
 
 static void unregisterHotkeys(HWND h)
 {
@@ -71,6 +72,134 @@ static bool registerHotkeys(HWND h)
     if (g_hkUp.vk)   ok = ok && RegisterHotKey(h, ID_HOTKEY_UP,   g_hkUp.mods,   g_hkUp.vk);
     if (g_hkDown.vk) ok = ok && RegisterHotKey(h, ID_HOTKEY_DOWN, g_hkDown.mods, g_hkDown.vk);
     return ok;
+}
+
+/* ---------- Settings persistence (Registry) ---------- */
+static const wchar_t* kRegKeyPath = L"Software\\StudioBrightnessPlusPlus";
+
+static void saveSettings()
+{
+    HKEY hKey;
+    DWORD disp;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, nullptr,
+                        0, KEY_WRITE, nullptr, &hKey, &disp) == ERROR_SUCCESS) {
+        DWORD autoEnabled = g_autoAdjustEnabled.load() ? 1 : 0;
+        RegSetValueExW(hKey, L"AutoBrightnessEnabled", 0, REG_DWORD,
+                      (BYTE*)&autoEnabled, sizeof(DWORD));
+
+        DWORD customEnabled = g_enableCustomHotkeys ? 1 : 0;
+        RegSetValueExW(hKey, L"CustomHotkeysEnabled", 0, REG_DWORD,
+                      (BYTE*)&customEnabled, sizeof(DWORD));
+
+        DWORD runAtStartup = g_runAtStartup ? 1 : 0;
+        RegSetValueExW(hKey, L"RunAtStartup", 0, REG_DWORD,
+                      (BYTE*)&runAtStartup, sizeof(DWORD));
+
+        RegSetValueExW(hKey, L"HotkeyUpMods", 0, REG_DWORD,
+                      (BYTE*)&g_hkUp.mods, sizeof(DWORD));
+        RegSetValueExW(hKey, L"HotkeyUpVK", 0, REG_DWORD,
+                      (BYTE*)&g_hkUp.vk, sizeof(DWORD));
+
+        RegSetValueExW(hKey, L"HotkeyDownMods", 0, REG_DWORD,
+                      (BYTE*)&g_hkDown.mods, sizeof(DWORD));
+        RegSetValueExW(hKey, L"HotkeyDownVK", 0, REG_DWORD,
+                      (BYTE*)&g_hkDown.vk, sizeof(DWORD));
+
+        RegCloseKey(hKey);
+    }
+}
+
+static void loadSettings()
+{
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD val, size = sizeof(DWORD);
+
+        if (RegQueryValueExW(hKey, L"AutoBrightnessEnabled", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_autoAdjustEnabled.store(val != 0);
+        }
+
+        if (RegQueryValueExW(hKey, L"CustomHotkeysEnabled", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_enableCustomHotkeys = (val != 0);
+        }
+
+        if (RegQueryValueExW(hKey, L"RunAtStartup", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_runAtStartup = (val != 0);
+        }
+
+        if (RegQueryValueExW(hKey, L"HotkeyUpMods", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_hkUp.mods = val;
+        }
+
+        if (RegQueryValueExW(hKey, L"HotkeyUpVK", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_hkUp.vk = val;
+        }
+
+        if (RegQueryValueExW(hKey, L"HotkeyDownMods", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_hkDown.mods = val;
+        }
+
+        if (RegQueryValueExW(hKey, L"HotkeyDownVK", nullptr, nullptr,
+                            (BYTE*)&val, &size) == ERROR_SUCCESS) {
+            g_hkDown.vk = val;
+        }
+
+        RegCloseKey(hKey);
+    }
+}
+
+/* ---------- Run at startup management ---------- */
+static bool enableStartup()
+{
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+        LONG result = RegSetValueExW(hKey, L"StudioBrightnessPlusPlus", 0, REG_SZ,
+                                     (BYTE*)exePath,
+                                     (DWORD)((wcslen(exePath) + 1) * sizeof(wchar_t)));
+        RegCloseKey(hKey);
+        return result == ERROR_SUCCESS;
+    }
+    return false;
+}
+
+static bool disableStartup()
+{
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, L"StudioBrightnessPlusPlus");
+        RegCloseKey(hKey);
+        return true;
+    }
+    return false;
+}
+
+static bool isStartupEnabled()
+{
+    HKEY hKey;
+    bool enabled = false;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t value[MAX_PATH];
+        DWORD size = sizeof(value);
+        enabled = (RegQueryValueExW(hKey, L"StudioBrightnessPlusPlus",
+                                    nullptr, nullptr, (BYTE*)value, &size) == ERROR_SUCCESS);
+        RegCloseKey(hKey);
+    }
+    return enabled;
 }
 
 /* ---------- prototypes ---------- */
@@ -211,6 +340,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_INITDIALOG: {
         CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_runAtStartup ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
         EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP),   g_enableCustomHotkeys);
         EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), g_enableCustomHotkeys);
@@ -236,6 +366,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (id == IDOK) {
             g_autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
+            g_runAtStartup = (IsDlgButtonChecked(d, IDC_RUN_AT_STARTUP) == BST_CHECKED);
             g_enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
             if (g_enableCustomHotkeys) {
                 getDlgHotkey(d, IDC_HOTKEY_UP,   g_hkUp);
@@ -246,6 +377,17 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp)
             if (!registerHotkeys(g_hMain)) {
                 MessageBoxW(d, L"Failed to register one or more hotkeys.", L"StudioBrightnessPlusPlus", MB_ICONERROR);
             }
+
+            // Save settings to registry
+            saveSettings();
+
+            // Manage startup registry key
+            if (g_runAtStartup) {
+                enableStartup();
+            } else {
+                disableStartup();
+            }
+
             EndDialog(d, IDOK);
             return TRUE;
         }
@@ -301,6 +443,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
             DestroyMenu(hMenu);
             if (cmd == IDM_TOGGLE_AUTO) {
                 g_autoAdjustEnabled.store(!g_autoAdjustEnabled.load());
+                saveSettings();
             } else if (cmd == IDM_OPTIONS) {
                 DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
             } else if (cmd == IDM_EXIT) {
@@ -390,6 +533,11 @@ int APIENTRY wWinMain(HINSTANCE hInst,HINSTANCE, PWSTR, int)
     g_hInst = hInst;
     INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
+
+    // Load settings from registry
+    loadSettings();
+    // Sync g_runAtStartup with actual startup registry state
+    g_runAtStartup = isStartupEnabled();
 
     int hid_res = hid_init();
     if (hid_res < 0 && hid_res != -10) {

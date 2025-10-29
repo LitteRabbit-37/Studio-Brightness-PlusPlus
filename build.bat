@@ -19,5 +19,5 @@ if errorlevel 1 exit /b 1
 :: Link everything
 cl -Fe./bin/studio-brightness-plusplus.exe obj/main.obj obj/hid.obj obj/studio-brightness-plusplus.res ^
     -link hid.lib setupapi.lib shlwapi.lib wbemuuid.lib comctl32.lib User32.lib Shell32.lib Gdi32.lib ^
-    sensorsapi.lib ole32.lib
+    sensorsapi.lib ole32.lib Advapi32.lib
 

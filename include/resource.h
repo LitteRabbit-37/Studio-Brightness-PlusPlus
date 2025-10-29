@@ -14,6 +14,7 @@
 // Controls (Options Dialog)
 #define IDC_AUTO_BRIGHTNESS     1001
 #define IDC_ENABLE_HOTKEYS      1002
+#define IDC_RUN_AT_STARTUP      1003
 #define IDC_HOTKEY_UP           1101
 #define IDC_HOTKEY_DOWN         1102
 #define IDC_RESET_SHORTCUTS     1201
