@@ -1,20 +1,34 @@
-<p align="center">
-  <img src="studio-brightness-plusplus.ico" />
-</p>
-<br>
-<br>
-
 <div align="center">
-  <img src="https://img.shields.io/github/downloads/LitteRabbit-37/Studio-Brightness-PlusPlus/total?color=%23CAAA3A">
+  <img src="studio-brightness-plusplus.ico" />
 </div>
 <br>
 <br>
+<div align="center">
+  <h1>Studio brightness ++</h1>
+  <p>Control your Apple studio display on Windows as if you were on macOS!</p>
+</div>
+<br>
+<div align="center">
+  <table>
+		<th><a href=https://litterabbit-37.github.io/litterabbit.github.io/StudioBrightnessPlusPlus.html>Website&nbsp;↗</a></th>
+		<td><a href=https://github.com/litterabbit-37/Studio-Brightness-PlusPlus/issues/new/choose>Help&nbsp;&&nbsp;Feedback</a></td>
+		<td><a href=https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus/releases>Releases</a></td>
+	</table>
+</div>
+<div align="center">
+  <img src="https://img.shields.io/github/downloads/LitteRabbit-37/Studio-Brightness-PlusPlus/total?color=%23CAAA3A">
+  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/LitteRabbit-37/Studio-Brightness-PlusPlus">
+  <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/LitteRabbit-37/Studio-Brightness-PlusPlus?style=social">
+</div>
 
-# Studio brightness ++
+<br>
+<br>
 
 > **Note: This project is a fork and extension of [studio-brightness](https://github.com/sfjohnson/studio-brightness) by Sam Johnson (sfjohnson).**
 
-## What is it?
+## Overview
+
+### What is it?
 
 **Studio brightness ++** is a small Windows utility for controlling the brightness of an Apple Studio Display:
 
@@ -22,7 +36,7 @@
 -   **Manual brightness control** via the native keyboard brightness keys (the “sun” keys, Fn+F1/F2, or QMK/VIA custom keys)
 -   Runs in the system tray, lightweight and easy to use
 
-## What's new in this version?
+### What's new in this version?
 
 Compared to the original, this fork adds:
 
@@ -33,31 +47,16 @@ Compared to the original, this fork adds:
 -   **Run at Windows startup** — optional setting to launch the application automatically when Windows starts.
 -   **Revised Studio Display detection** (`hid.cpp` rewritten) for more robust device matching.
 
-## Credits
+### Credits
 
 -   **Original author:** [Sam Johnson (sfjohnson)](https://github.com/sfjohnson) ([studio-brightness](https://github.com/sfjohnson/studio-brightness))
 -   **Modifications, HID improvements, ALS/autobrightness, native key support:** @LitteRabbit-37
 
-## Prerequisites
+### Prerequisites
 
 -   Windows 10 or later
--   **Apple Studio Display** connected via USB-C/Thunderbolt
--   Visual Studio tools (Developer Command Prompt with `cl.exe` and `rc.exe` in PATH), or CMake
+-   **Apple Studio Display** connected via **USB-C/Thunderbolt** (not HDMI/Display Port to USB-C)
 -   (Sometimes required) Administrator rights for HID access
-
-## Building
-
-### Using build.bat
-
-1. Open a **x64 Developer Command Prompt for VS**
-2. Go to the project directory
-3. Run:
-
-```bash
-build.bat
-```
-
-The output will be `bin\studio-brightness-plusplus.exe`.
 
 ## Usage
 
@@ -71,6 +70,24 @@ The output will be `bin\studio-brightness-plusplus.exe`.
     -   Click "Reset to Defaults" to disable custom shortcuts and rely only on the native Windows brightness keys
     -   All settings are automatically saved to Windows Registry and persist across restarts
 -   **Quit:** Right‑click the tray icon and select "Quit".
+
+## Building
+
+### Prerequisites
+
+-   Visual Studio tools (Developer Command Prompt with `cl.exe` and `rc.exe` in PATH), or CMake
+
+### Using build.bat
+
+1. Open a **x64 Developer Command Prompt for VS**
+2. Go to the project directory
+3. Run:
+
+```bash
+build.bat
+```
+
+The output will be `bin\studio-brightness-plusplus.exe`.
 
 ## Technical notes
 
