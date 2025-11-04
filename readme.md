@@ -1,6 +1,14 @@
 <p align="center">
   <img src="studio-brightness-plusplus.ico" />
 </p>
+<br>
+<br>
+
+<div align="center">
+  <img src="https://img.shields.io/github/downloads/LitteRabbit-37/Studio-Brightness-PlusPlus/total?color=%23CAAA3A">
+</div>
+<br>
+<br>
 
 # Studio brightness ++
 
