@@ -1,11 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <hidsdi.h>
-#include <hidusage.h>
 #include <shellapi.h>
 #include <commctrl.h>
-#include <strsafe.h>
 #include <initguid.h>
 #include <sensorsapi.h>
 #include <sensors.h>
@@ -14,6 +11,7 @@
 #include <chrono>
 #include <algorithm>
 #include <vector>
+#include <cwchar>
 #include <atomic>
 #include "resource.h"
 #include "hid.h"
@@ -30,6 +28,9 @@ static HINSTANCE g_hInst = nullptr;
 static HWND      g_hMain = nullptr;
 constexpr UINT   WMAPP_NOTIFYCALLBACK = WM_APP + 1;
 constexpr wchar_t kWndClass[] = L"StudioBrightnessClass";
+
+constexpr wchar_t kReleaseUrl[] = L"https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus/releases";
+constexpr wchar_t kAppVersion[] = L"1.3.1";
 
 /* ---------- GUID de l’icône systray ---------- */
 DEFINE_GUID(GUID_PrinterIcon,
@@ -269,19 +270,6 @@ float getAmbientLux()
     return lux;
 }
 
-/* ---------- maj automatique de la référence user ---------- */
-void updateUserReferenceIfChanged()
-{
-    ULONG cur;
-    if (hid_getBrightness(&cur)==0 &&
-        std::abs((long)cur-(long)previousUserBrightness) > 1000)
-    {
-        baseBrightness = cur;
-        baseLux        = getAmbientLux();
-        previousUserBrightness = cur;
-    }
-}
-
 /* ---------- helpers: brightness step ---------- */
 void adjustBrightnessByStep(int direction)
 {
@@ -435,6 +423,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
             HMENU hMenu = CreatePopupMenu();
             AppendMenuW(hMenu, MF_STRING | (g_autoAdjustEnabled.load() ? MF_CHECKED : 0), IDM_TOGGLE_AUTO, L"Automatic Brightness");
             AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
+            AppendMenuW(hMenu, MF_STRING, IDM_CHECK_UPDATE, L"Check update");
+            wchar_t versionLabel[32];
+            swprintf_s(versionLabel, L"Version %s", kAppVersion);
+            AppendMenuW(hMenu, MF_STRING | MF_DISABLED | MF_GRAYED, IDM_VERSION_INFO, versionLabel);
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Quit");
             POINT pt; GetCursorPos(&pt);
@@ -446,6 +438,11 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam)
                 saveSettings();
             } else if (cmd == IDM_OPTIONS) {
                 DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
+            } else if (cmd == IDM_CHECK_UPDATE) {
+                auto r = ShellExecuteW(h, L"open", kReleaseUrl, nullptr, nullptr, SW_SHOWNORMAL);
+                if ((UINT_PTR)r <= 32) {
+                    MessageBoxW(h, L"Unable to open releases page.", L"StudioBrightnessPlusPlus", MB_ICONERROR);
+                }
             } else if (cmd == IDM_EXIT) {
                 PostMessage(h, WM_CLOSE, 0, 0);
             }

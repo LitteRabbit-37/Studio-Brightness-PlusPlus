@@ -3,6 +3,8 @@
 #define IDM_EXIT                124
 #define IDM_OPTIONS             125
 #define IDM_TOGGLE_AUTO         126
+#define IDM_CHECK_UPDATE        127
+#define IDM_VERSION_INFO        128
 #define IDI_MYICON              201
 #define IDI_NOTIFICATIONICON    207
 #define IDC_NOTIFICATIONICON    208
