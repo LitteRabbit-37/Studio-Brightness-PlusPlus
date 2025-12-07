@@ -1,0 +1,35 @@
+---
+BasedOnStyle: Microsoft
+
+# No Sorting of #includes
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+# Tabs and Indentation
+UseTab: ForIndentation
+IndentWidth: 4
+TabWidth: 4
+
+# Braces
+BreakBeforeBraces: Attach
+
+# Spaces
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: true
+
+# Statements and Functions
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+
+# Alignment
+AlignConsecutiveMacros: true
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+
+# Code Formatting
+ColumnLimit: 120
+
+# Comments
+ReflowComments: false
+SortUsingDeclarations: false
