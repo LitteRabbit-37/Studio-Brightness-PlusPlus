@@ -13,7 +13,8 @@
 
 /* ---------- Apple Studio Display ---------- */
 static const wchar_t vidStr[]        = L"vid_05ac";
-static const wchar_t pidStr[]        = L"pid_1114";
+static const wchar_t pidAuth[]       = L"pid_1114"; // Studio Display
+static const wchar_t pidXDR[]        = L"pid_9243"; // Pro Display XDR
 static const wchar_t interfaceStr[]  = L"mi_07";
 static const wchar_t collectionStr[] = L"&col"; // pour exclure les COLxx
 
@@ -44,7 +45,7 @@ static void closeCurrent() {
 }
 
 /* ============================================================ */
-int hid_init() {
+int hid_init(DisplayType *outType) {
 	if (hDev != INVALID_HANDLE_VALUE)
 		return -1;
 
@@ -72,8 +73,20 @@ int hid_init() {
 		const wchar_t *path = det->DevicePath;
 
 		/*** filtre : VID/PID & MI_07 sans &COLxx ***/
-		if (!icontains(path, vidStr) || !icontains(path, pidStr) ||
-		    /* !icontains(path, interfaceStr) || */ icontains(path, collectionStr))
+		if (!icontains(path, vidStr))
+			continue;
+		if (icontains(path, collectionStr))
+			continue;
+
+		// Check for specific PIDs
+		DisplayType foundType = DisplayType::None;
+		if (icontains(path, pidAuth)) {
+			foundType = DisplayType::StudioDisplay;
+		} else if (icontains(path, pidXDR)) {
+			foundType = DisplayType::ProXDR;
+		}
+
+		if (foundType == DisplayType::None)
 			continue;
 
 		hDev = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
@@ -123,6 +136,8 @@ int hid_init() {
 		featCaps.usage = v[0].NotRange.Usage;
 
 		SetupDiDestroyDeviceInfoList(set);
+		if (outType)
+			*outType = foundType;
 		return 0; // SUCCESS
 	}
 
