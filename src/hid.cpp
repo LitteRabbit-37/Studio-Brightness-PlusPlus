@@ -12,11 +12,11 @@
 #pragma comment(lib, "shlwapi.lib")
 
 /* ---------- Apple Studio Display ---------- */
-static const wchar_t vidStr[]        = L"vid_05ac";
-static const wchar_t pidAuth[]       = L"pid_1114"; // Studio Display
-static const wchar_t pidXDR[]        = L"pid_9243"; // Pro Display XDR
-static const wchar_t interfaceStr[]  = L"mi_07";
-static const wchar_t collectionStr[] = L"&col"; // pour exclure les COLxx
+static const wchar_t vidStr[]           = L"vid_05ac";
+static const wchar_t pidStudioDisplay[] = L"pid_1114"; // Studio Display
+static const wchar_t pidXDR[]           = L"pid_9243"; // Pro Display XDR
+static const wchar_t interfaceStr[]     = L"mi_07";
+static const wchar_t collectionStr[]    = L"&col"; // pour exclure les COLxx
 
 inline bool icontains(const wchar_t *hay, const wchar_t *needle) {
 	return StrStrIW(hay, needle) != nullptr; // insensible à la casse
@@ -80,7 +80,7 @@ int hid_init(DisplayType *outType) {
 
 		// Check for specific PIDs
 		DisplayType foundType = DisplayType::None;
-		if (icontains(path, pidAuth)) {
+		if (icontains(path, pidStudioDisplay)) {
 			foundType = DisplayType::StudioDisplay;
 		} else if (icontains(path, pidXDR)) {
 			foundType = DisplayType::ProXDR;
