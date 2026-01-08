@@ -4,7 +4,13 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-int  hid_init();
+enum class DisplayType {
+	None,
+	StudioDisplay,
+	ProXDR
+};
+
+int  hid_init(DisplayType *outType = nullptr);
 void hid_deinit();
 int  hid_getBrightness(ULONG *val);
 int  hid_setBrightness(ULONG val);
