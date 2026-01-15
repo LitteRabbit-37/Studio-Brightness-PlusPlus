@@ -62,10 +62,11 @@ static HotkeySpec g_hkUp{0, 0}, g_hkDown{0, 0};
 static bool       g_runAtStartup = false;
 
 // Brightness steps (configurable, 10-50)
-constexpr ULONG kDefaultBrightnessSteps = 10;
-constexpr ULONG kMinBrightnessSteps     = 10;
-constexpr ULONG kMaxBrightnessSteps     = 50;
-static ULONG    g_brightnessSteps       = kDefaultBrightnessSteps;
+constexpr ULONG    kDefaultBrightnessSteps = 10;
+constexpr ULONG    kMinBrightnessSteps     = 10;
+constexpr ULONG    kMaxBrightnessSteps     = 50;
+static ULONG       g_brightnessSteps       = kDefaultBrightnessSteps;
+static DisplayType g_currentDisplayType    = DisplayType::None;
 
 static void unregisterHotkeys(HWND h) {
 	UnregisterHotKey(h, ID_HOTKEY_UP);
@@ -229,6 +230,11 @@ ULONG mapLuxToBrightness(float lux) {
 
 /* ---------- lecture capteur ALS ---------- */
 float getAmbientLux() {
+	// Pro Display XDR does not support ALS via Windows Sensor API (causes hang)
+	if (g_currentDisplayType == DisplayType::ProXDR) {
+		return 100.f;
+	}
+
 	float                  lux = 100.f;
 	ComPtr<ISensorManager> mgr;
 	if (FAILED(CoCreateInstance(CLSID_SensorManager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&mgr))))
@@ -502,8 +508,8 @@ void startWorker() {
 			{
 				ULONG tmp;
 				if (hid_getBrightness(&tmp) != 0) {
-					hid_deinit();          // ferme proprement l‘ancien handle
-					if (hid_init() == 0) { // nouvel essai de connexion
+					hid_deinit();                               // ferme proprement l‘ancien handle
+					if (hid_init(&g_currentDisplayType) == 0) { // nouvel essai de connexion
 						detectBrightnessRange();
 						if (hid_getBrightness(&currentBrightness) == 0) {
 							baseBrightness = previousUserBrightness = currentBrightness;
@@ -553,7 +559,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	// Sync g_runAtStartup with actual startup registry state
 	g_runAtStartup = isStartupEnabled();
 
-	int hid_res = hid_init();
+	int hid_res = hid_init(&g_currentDisplayType);
 	if (hid_res < 0 && hid_res != -10) {
 		MessageBoxW(nullptr, L"hid_init failed", L"StudioBrightnessPlusPlus", MB_ICONERROR);
 		return 1;
