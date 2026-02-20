@@ -13,15 +13,22 @@
 #include <vector>
 #include <cwchar>
 #include <atomic>
+#include <gdiplus.h>
+
 #include "hid.h"
 #include "resource.h"
+#include "Settings.h"
+#include "OSDWindow.h"
+#include "TrayPopup.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "setupapi.lib")
+#pragma comment(lib, "gdiplus.lib")
 
 using Microsoft::WRL::ComPtr;
+using namespace Gdiplus;
 
 /* ---------- globals ---------- */
 static HINSTANCE  g_hInst              = nullptr;
@@ -30,12 +37,12 @@ constexpr UINT    WMAPP_NOTIFYCALLBACK = WM_APP + 1;
 constexpr wchar_t kWndClass[]          = L"StudioBrightnessClass";
 
 constexpr wchar_t kReleaseUrl[] = L"https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus/releases";
-constexpr wchar_t kAppVersion[] = L"1.5.0";
+constexpr wchar_t kAppVersion[] = L"2.0.0";
 
-/* ---------- GUID de l'icône systray ---------- */
+/* ---------- system tray icon GUID ---------- */
 DEFINE_GUID(GUID_PrinterIcon, 0x9d0b8b92, 0x4e1c, 0x488e, 0xa1, 0xe1, 0x23, 0x31, 0xaf, 0xce, 0x2c, 0xb5);
 
-/* ---------- variables luminosité ---------- */
+/* ---------- brightness variables ---------- */
 static float baseLux                = 100.f;
 static ULONG baseBrightness         = 30000;
 static ULONG currentBrightness      = 30000;
@@ -43,30 +50,18 @@ static ULONG previousUserBrightness = 30000;
 static ULONG minBrightness          = 1000;
 static ULONG maxBrightness          = 60000;
 
+// GDI+
+static ULONG_PTR gdiplusToken;
+
+static DisplayType g_currentDisplayType = DisplayType::None;
+
 // Auto-adjust control & deadband
-static std::atomic<bool> g_autoAdjustEnabled{true};
-static long              computeDeadband() {
+static long computeDeadband() {
     long range  = (long) std::max<ULONG>(1, maxBrightness - minBrightness);
     long byPct  = (long) std::max(1L, (long) (range * 0.03f)); // 3% of range
     long minAbs = 1500L;                                       // absolute floor
     return std::max(byPct, minAbs);
 }
-
-// Custom hotkeys
-struct HotkeySpec {
-	UINT mods;
-	UINT vk;
-};
-static bool       g_enableCustomHotkeys = false;
-static HotkeySpec g_hkUp{0, 0}, g_hkDown{0, 0};
-static bool       g_runAtStartup = false;
-
-// Brightness steps (configurable, 10-50)
-constexpr ULONG    kDefaultBrightnessSteps = 10;
-constexpr ULONG    kMinBrightnessSteps     = 10;
-constexpr ULONG    kMaxBrightnessSteps     = 50;
-static ULONG       g_brightnessSteps       = kDefaultBrightnessSteps;
-static DisplayType g_currentDisplayType    = DisplayType::None;
 
 static void unregisterHotkeys(HWND h) {
 	UnregisterHotKey(h, ID_HOTKEY_UP);
@@ -74,129 +69,18 @@ static void unregisterHotkeys(HWND h) {
 }
 static bool registerHotkeys(HWND h) {
 	unregisterHotkeys(h);
-	if (!g_enableCustomHotkeys)
+	if (!g_settings.enableCustomHotkeys)
 		return true;
 	bool ok = true;
-	if (g_hkUp.vk)
-		ok = ok && RegisterHotKey(h, ID_HOTKEY_UP, g_hkUp.mods, g_hkUp.vk);
-	if (g_hkDown.vk)
-		ok = ok && RegisterHotKey(h, ID_HOTKEY_DOWN, g_hkDown.mods, g_hkDown.vk);
+	if (g_settings.hkUp.vk)
+		ok = ok && RegisterHotKey(h, ID_HOTKEY_UP, g_settings.hkUp.mods, g_settings.hkUp.vk);
+	if (g_settings.hkDown.vk)
+		ok = ok && RegisterHotKey(h, ID_HOTKEY_DOWN, g_settings.hkDown.mods, g_settings.hkDown.vk);
 	return ok;
 }
 
-/* ---------- Settings persistence (Registry) ---------- */
-static const wchar_t *kRegKeyPath = L"Software\\StudioBrightnessPlusPlus";
-
-static void saveSettings() {
-	HKEY  hKey;
-	DWORD disp;
-	if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, &disp) ==
-	    ERROR_SUCCESS) {
-		DWORD autoEnabled = g_autoAdjustEnabled.load() ? 1 : 0;
-		RegSetValueExW(hKey, L"AutoBrightnessEnabled", 0, REG_DWORD, (BYTE *) &autoEnabled, sizeof(DWORD));
-
-		DWORD customEnabled = g_enableCustomHotkeys ? 1 : 0;
-		RegSetValueExW(hKey, L"CustomHotkeysEnabled", 0, REG_DWORD, (BYTE *) &customEnabled, sizeof(DWORD));
-
-		DWORD runAtStartup = g_runAtStartup ? 1 : 0;
-		RegSetValueExW(hKey, L"RunAtStartup", 0, REG_DWORD, (BYTE *) &runAtStartup, sizeof(DWORD));
-
-		RegSetValueExW(hKey, L"HotkeyUpMods", 0, REG_DWORD, (BYTE *) &g_hkUp.mods, sizeof(DWORD));
-		RegSetValueExW(hKey, L"HotkeyUpVK", 0, REG_DWORD, (BYTE *) &g_hkUp.vk, sizeof(DWORD));
-
-		RegSetValueExW(hKey, L"HotkeyDownMods", 0, REG_DWORD, (BYTE *) &g_hkDown.mods, sizeof(DWORD));
-		RegSetValueExW(hKey, L"HotkeyDownVK", 0, REG_DWORD, (BYTE *) &g_hkDown.vk, sizeof(DWORD));
-
-		RegSetValueExW(hKey, L"BrightnessSteps", 0, REG_DWORD, (BYTE *) &g_brightnessSteps, sizeof(DWORD));
-
-		RegCloseKey(hKey);
-	}
-}
-
-static void loadSettings() {
-	HKEY hKey;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-		DWORD val, size = sizeof(DWORD);
-
-		if (RegQueryValueExW(hKey, L"AutoBrightnessEnabled", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_autoAdjustEnabled.store(val != 0);
-		}
-
-		if (RegQueryValueExW(hKey, L"CustomHotkeysEnabled", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_enableCustomHotkeys = (val != 0);
-		}
-
-		if (RegQueryValueExW(hKey, L"RunAtStartup", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_runAtStartup = (val != 0);
-		}
-
-		if (RegQueryValueExW(hKey, L"HotkeyUpMods", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_hkUp.mods = val;
-		}
-
-		if (RegQueryValueExW(hKey, L"HotkeyUpVK", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_hkUp.vk = val;
-		}
-
-		if (RegQueryValueExW(hKey, L"HotkeyDownMods", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_hkDown.mods = val;
-		}
-
-		if (RegQueryValueExW(hKey, L"HotkeyDownVK", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_hkDown.vk = val;
-		}
-
-		if (RegQueryValueExW(hKey, L"BrightnessSteps", nullptr, nullptr, (BYTE *) &val, &size) == ERROR_SUCCESS) {
-			g_brightnessSteps = std::clamp(val, kMinBrightnessSteps, kMaxBrightnessSteps);
-		}
-
-		RegCloseKey(hKey);
-	}
-}
-
-/* ---------- Run at startup management ---------- */
-static bool enableStartup() {
-	wchar_t exePath[MAX_PATH];
-	GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-
-	HKEY hKey;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_WRITE, &hKey) ==
-	    ERROR_SUCCESS) {
-		LONG result = RegSetValueExW(hKey, L"StudioBrightnessPlusPlus", 0, REG_SZ, (BYTE *) exePath,
-		                             (DWORD) ((wcslen(exePath) + 1) * sizeof(wchar_t)));
-		RegCloseKey(hKey);
-		return result == ERROR_SUCCESS;
-	}
-	return false;
-}
-
-static bool disableStartup() {
-	HKEY hKey;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_WRITE, &hKey) ==
-	    ERROR_SUCCESS) {
-		RegDeleteValueW(hKey, L"StudioBrightnessPlusPlus");
-		RegCloseKey(hKey);
-		return true;
-	}
-	return false;
-}
-
-static bool isStartupEnabled() {
-	HKEY hKey;
-	bool enabled = false;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) ==
-	    ERROR_SUCCESS) {
-		wchar_t value[MAX_PATH];
-		DWORD   size = sizeof(value);
-		enabled      = (RegQueryValueExW(hKey, L"StudioBrightnessPlusPlus", nullptr, nullptr, (BYTE *) value, &size) ==
-                   ERROR_SUCCESS);
-		RegCloseKey(hKey);
-	}
-	return enabled;
-}
-
 /* ---------- prototypes ---------- */
-void             detectBrightnessRange(); // définition plus bas
+void             detectBrightnessRange(); // defined below
 float            getAmbientLux();
 INT_PTR CALLBACK OptionsDlgProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -228,34 +112,45 @@ ULONG mapLuxToBrightness(float lux) {
 	return static_cast<ULONG>(std::clamp(tgt, float(minBrightness), float(maxBrightness)));
 }
 
-/* ---------- lecture capteur ALS ---------- */
+/* ---------- ambient light sensor (ALS) ---------- */
 float getAmbientLux() {
 	// Pro Display XDR does not support ALS via Windows Sensor API (causes hang)
-	if (g_currentDisplayType == DisplayType::ProXDR) {
+	if (g_currentDisplayType == DisplayType::ProXDR)
 		return 100.f;
-	}
+
+	// Cache the reading for 500 ms to avoid creating COM objects on every
+	// worker tick (~10/sec). Ambient light changes slowly enough that a
+	// half-second stale reading is acceptable. These statics are written from
+	// the worker thread and rarely from the main thread; on x86, aligned
+	// float/DWORD writes are hardware-atomic so the benign race is safe.
+	static float s_lux      = 100.f;
+	static DWORD s_lastTick = 0;
+	DWORD        now        = GetTickCount();
+	if (now - s_lastTick < 500)
+		return s_lux;
+	s_lastTick = now;
 
 	float                  lux = 100.f;
 	ComPtr<ISensorManager> mgr;
 	if (FAILED(CoCreateInstance(CLSID_SensorManager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&mgr))))
-		return lux;
+		return s_lux; // return cached value on COM failure
 
 	ComPtr<ISensorCollection> col;
 	if (FAILED(mgr->GetSensorsByType(SENSOR_TYPE_AMBIENT_LIGHT, &col)))
-		return lux;
+		return s_lux;
 
 	ULONG count = 0;
 	col->GetCount(&count);
 	if (!count)
-		return lux;
+		return s_lux;
 
 	ComPtr<ISensor> sensor;
 	if (FAILED(col->GetAt(0, &sensor)))
-		return lux;
+		return s_lux;
 
 	ComPtr<ISensorDataReport> rpt;
 	if (FAILED(sensor->GetData(&rpt)))
-		return lux;
+		return s_lux;
 
 	PROPVARIANT v;
 	PropVariantInit(&v);
@@ -266,12 +161,37 @@ float getAmbientLux() {
 			lux = static_cast<float>(v.dblVal);
 	}
 	PropVariantClear(&v);
+	s_lux = lux;
 	return lux;
+}
+
+/* ---------- Central Brightness Setter ---------- */
+// isUserAction: true if the change was initiated by the user (shortcut, slider)
+//               This resets the auto-brightness baseline.
+// showOSD:      true if the OSD should be displayed.
+void SetBrightness(ULONG val, bool isUserAction, bool showOSD) {
+    ULONG safeVal = std::clamp(val, minBrightness, maxBrightness);
+    if (safeVal != currentBrightness) {
+        hid_setBrightness(safeVal);
+        currentBrightness = safeVal;
+        
+        if (isUserAction) {
+            baseBrightness = safeVal;
+            previousUserBrightness = safeVal;
+            if (safeVal != minBrightness && safeVal != maxBrightness) {
+                 baseLux = getAmbientLux();
+            }
+        }
+        
+        if (showOSD && g_settings.showOSD) {
+            OSDWindow::Show((int)currentBrightness, (int)maxBrightness);
+        }
+    }
 }
 
 /* ---------- helpers: brightness step ---------- */
 void adjustBrightnessByStep(int direction) {
-	ULONG step = (maxBrightness - minBrightness) / g_brightnessSteps;
+	ULONG step = (maxBrightness - minBrightness) / g_settings.brightnessSteps;
 	if (step < 1)
 		step = 1;
 
@@ -287,14 +207,10 @@ void adjustBrightnessByStep(int direction) {
 			newBrightness    = currentBrightness - actualStep;
 		}
 	}
+    
+    // Manual Step -> User Action = true, OSD = true
 	if (newBrightness != currentBrightness) {
-		hid_setBrightness(newBrightness);
-		baseBrightness         = newBrightness;
-		currentBrightness      = newBrightness;
-		previousUserBrightness = newBrightness;
-		if (newBrightness != minBrightness && newBrightness != maxBrightness) {
-			baseLux = getAmbientLux();
-		}
+        SetBrightness(newBrightness, true, true);
 	}
 }
 
@@ -328,16 +244,17 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	UNREFERENCED_PARAMETER(lp);
 	switch (msg) {
 	case WM_INITDIALOG: {
-		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
-		CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_runAtStartup ? BST_CHECKED : BST_UNCHECKED);
-		CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
-		EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP), g_enableCustomHotkeys);
-		EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), g_enableCustomHotkeys);
-		setDlgHotkey(d, IDC_HOTKEY_UP, g_hkUp);
-		setDlgHotkey(d, IDC_HOTKEY_DOWN, g_hkDown);
+		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(d, IDC_SHOW_OSD, g_settings.showOSD ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_settings.runAtStartup ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_settings.enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
+		EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP), g_settings.enableCustomHotkeys);
+		EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), g_settings.enableCustomHotkeys);
+		setDlgHotkey(d, IDC_HOTKEY_UP, g_settings.hkUp);
+		setDlgHotkey(d, IDC_HOTKEY_DOWN, g_settings.hkDown);
 		// Initialize brightness steps spin control
 		SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_SETRANGE32, kMinBrightnessSteps, kMaxBrightnessSteps);
-		SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_SETPOS32, 0, g_brightnessSteps);
+		SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_SETPOS32, 0, g_settings.brightnessSteps);
 		return TRUE;
 	}
 	case WM_COMMAND: {
@@ -360,15 +277,16 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 			return TRUE;
 		}
 		if (id == IDOK) {
-			g_autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
-			g_runAtStartup        = (IsDlgButtonChecked(d, IDC_RUN_AT_STARTUP) == BST_CHECKED);
-			g_enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
-			if (g_enableCustomHotkeys) {
-				getDlgHotkey(d, IDC_HOTKEY_UP, g_hkUp);
-				getDlgHotkey(d, IDC_HOTKEY_DOWN, g_hkDown);
+			g_settings.autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
+			g_settings.showOSD = (IsDlgButtonChecked(d, IDC_SHOW_OSD) == BST_CHECKED);
+			g_settings.runAtStartup        = (IsDlgButtonChecked(d, IDC_RUN_AT_STARTUP) == BST_CHECKED);
+			g_settings.enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
+			if (g_settings.enableCustomHotkeys) {
+				getDlgHotkey(d, IDC_HOTKEY_UP, g_settings.hkUp);
+				getDlgHotkey(d, IDC_HOTKEY_DOWN, g_settings.hkDown);
 			} else {
-				g_hkUp   = {0, 0};
-				g_hkDown = {0, 0};
+				g_settings.hkUp   = {0, 0};
+				g_settings.hkDown = {0, 0};
 			}
 			if (!registerHotkeys(g_hMain)) {
 				MessageBoxW(d, L"Failed to register one or more hotkeys.", L"StudioBrightnessPlusPlus", MB_ICONERROR);
@@ -376,17 +294,13 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 
 			// Get brightness steps value with validation
 			ULONG steps       = (ULONG) SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_GETPOS32, 0, 0);
-			g_brightnessSteps = std::clamp(steps, kMinBrightnessSteps, kMaxBrightnessSteps);
+			g_settings.brightnessSteps = std::clamp(steps, kMinBrightnessSteps, kMaxBrightnessSteps);
 
 			// Save settings to registry
-			saveSettings();
+			g_settings.Save();
 
 			// Manage startup registry key
-			if (g_runAtStartup) {
-				enableStartup();
-			} else {
-				disableStartup();
-			}
+			g_settings.SetStartup(g_settings.runAtStartup);
 
 			EndDialog(d, IDOK);
 			return TRUE;
@@ -401,7 +315,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	return FALSE;
 }
 
-/* ---------- fenêtre fantôme & WndProc ---------- */
+/* ---------- hidden window & WndProc ---------- */
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	if (m == WM_HOTKEY) {
 		if (wParam == ID_HOTKEY_UP) {
@@ -439,9 +353,36 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		return 0;
 	}
 	if (m == WMAPP_NOTIFYCALLBACK) {
+        // Handle Tray Click
+        if (LOWORD(lParam) == WM_LBUTTONUP) {
+            // Calculate current percentage
+            int range = maxBrightness - minBrightness;
+            if (range <= 0) range = 1;
+            int pct = (int)((float)(currentBrightness - minBrightness) / (float)range * 100.0f);
+            
+            TrayPopup::Show(h, pct, [](int newPct) {
+                // Callback from slider -> User Action = true, OSD = false (Silent)
+                ULONG r = maxBrightness - minBrightness;
+                ULONG val = minBrightness + (ULONG)((float)r * (float)newPct / 100.0f);
+                SetBrightness(val, true, false); 
+            });
+            return 0;
+        }
+        
 		if (LOWORD(lParam) == WM_RBUTTONUP) {
 			HMENU hMenu = CreatePopupMenu();
-			AppendMenuW(hMenu, MF_STRING | (g_autoAdjustEnabled.load() ? MF_CHECKED : 0), IDM_TOGGLE_AUTO,
+            
+            // Display connection status
+            if (g_currentDisplayType == DisplayType::StudioDisplay) {
+                AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, L"\U0001F7E2 Studio Display Connected");
+            } else if (g_currentDisplayType == DisplayType::ProXDR) {
+                AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, L"\U0001F7E2 Pro Display XDR Connected");
+            } else {
+                AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, L"\U0001F534 No Display Detected");
+            }
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+			AppendMenuW(hMenu, MF_STRING | (g_settings.autoAdjustEnabled.load() ? MF_CHECKED : 0), IDM_TOGGLE_AUTO,
 			            L"Automatic Brightness");
 			AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
 			AppendMenuW(hMenu, MF_STRING, IDM_CHECK_UPDATE, L"Check update");
@@ -456,8 +397,8 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, h, nullptr);
 			DestroyMenu(hMenu);
 			if (cmd == IDM_TOGGLE_AUTO) {
-				g_autoAdjustEnabled.store(!g_autoAdjustEnabled.load());
-				saveSettings();
+				g_settings.autoAdjustEnabled.store(!g_settings.autoAdjustEnabled.load());
+				g_settings.Save();
 			} else if (cmd == IDM_OPTIONS) {
 				DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
 			} else if (cmd == IDM_CHECK_UPDATE) {
@@ -478,7 +419,6 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		PostQuitMessage(0);
 		return 0;
 	}
-	// Passer les vrais wParam et lParam à DefWindowProc
 	return DefWindowProc(h, m, wParam, lParam);
 }
 
@@ -500,16 +440,21 @@ bool RegisterHiddenClass() {
 	return true;
 }
 
-/* ---------- worker ---------- */
+/* ---------- background worker thread ---------- */
 void startWorker() {
 	std::thread([] {
+		// Initialize COM for this thread (needed for getAmbientLux / Sensor API).
+		// The thread runs indefinitely so CoUninitialize is never reached, which
+		// is acceptable for a thread that lives for the process lifetime.
+		CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 		for (;;) {
-			/* ---------- tentative de (re)connexion ---------- */
+			/* ---------- device (re)connection attempt ---------- */
 			{
 				ULONG tmp;
 				if (hid_getBrightness(&tmp) != 0) {
-					hid_deinit();                               // ferme proprement l'ancien handle
-					if (hid_init(&g_currentDisplayType) == 0) { // nouvel essai de connexion
+					g_currentDisplayType = DisplayType::None; // clear until reconnect succeeds
+					hid_deinit();                              // close the stale handle
+					if (hid_init(&g_currentDisplayType) == 0) { // attempt reconnection
 						detectBrightnessRange();
 						if (hid_getBrightness(&currentBrightness) == 0) {
 							baseBrightness = previousUserBrightness = currentBrightness;
@@ -519,7 +464,7 @@ void startWorker() {
 				}
 			}
 
-			if (g_autoAdjustEnabled.load()) {
+			if (g_settings.autoAdjustEnabled.load()) {
 				ULONG tgt  = mapLuxToBrightness(getAmbientLux());
 				long  diff = (long) tgt - (long) currentBrightness;
 				long  db   = computeDeadband();
@@ -533,8 +478,8 @@ void startWorker() {
 				if (diff) {
 					long step  = std::max((long) ((maxBrightness - minBrightness) * 0.02f), 500L);
 					long delta = std::clamp(diff, -step, step);
-					currentBrightness += delta;
-					hid_setBrightness(currentBrightness);
+					// Auto Update -> User Action = false, OSD = false
+                    SetBrightness(currentBrightness + delta, false, false);
 				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -542,31 +487,45 @@ void startWorker() {
 	}).detach();
 }
 
-/* ---------- fonction manquante ---------- */
+/* ---------- brightness range detection ---------- */
 void detectBrightnessRange() {
 	hid_getBrightnessRange(&minBrightness, &maxBrightness);
 }
 
 /* ---------- WinMain ---------- */
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
+	// Prevent multiple instances from running simultaneously.
+	// If GetLastError() == ERROR_ALREADY_EXISTS after CreateMutexW, another
+	// instance already owns the mutex — just exit silently.
+	HANDLE hSingleInstance = CreateMutexW(nullptr, TRUE, L"StudioBrightnessPlusPlus_SingleInstance");
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		if (hSingleInstance) CloseHandle(hSingleInstance);
+		return 0;
+	}
+
+    // Initialize GDI+
+    GdiplusStartupInput gdiplusStartupInput;
+    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
 	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	g_hInst = hInst;
 	INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_WIN95_CLASSES};
 	InitCommonControlsEx(&icc);
 
 	// Load settings from registry
-	loadSettings();
-	// Sync g_runAtStartup with actual startup registry state
-	g_runAtStartup = isStartupEnabled();
-
-	int hid_res = hid_init(&g_currentDisplayType);
-	if (hid_res < 0 && hid_res != -10) {
-		MessageBoxW(nullptr, L"hid_init failed", L"StudioBrightnessPlusPlus", MB_ICONERROR);
-		return 1;
+	g_settings.Load();
+	bool realStartup = g_settings.IsStartupEnabled();
+	if (g_settings.runAtStartup != realStartup) {
+		if (g_settings.runAtStartup) g_settings.SetStartup(true);
 	}
 
-	if (!RegisterHiddenClass())
+	hid_init(&g_currentDisplayType);
+	// Ignore errors, we'll retry in the worker thread
+
+	if (!RegisterHiddenClass()) {
+		CloseHandle(hSingleInstance);
 		return 1;
+	}
 
 	SetLastError(0);
 	HWND h  = CreateWindowW(kWndClass, L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 400, 200, nullptr,
@@ -576,9 +535,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		wchar_t buf[128];
 		wsprintf(buf, L"CreateWindowW failed (%lu)", GetLastError());
 		MessageBoxW(nullptr, buf, L"StudioBrightnessPlusPlus", MB_ICONERROR | MB_TOPMOST);
+		CloseHandle(hSingleInstance);
 		return 1;
 	}
-	ShowWindow(h, SW_HIDE); // fenêtre invisible
+	ShowWindow(h, SW_HIDE); // keep the window hidden
 
 	detectBrightnessRange();
 	hid_getBrightness(&currentBrightness);
@@ -592,11 +552,16 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	rid.hwndTarget  = h;
 	if (!RegisterRawInputDevices(&rid, 1, sizeof(rid))) {
 		MessageBoxW(nullptr, L"RegisterRawInputDevices failed", L"StudioBrightnessPlusPlus", MB_ICONERROR);
+		CloseHandle(hSingleInstance);
 		return 1;
 	}
-	// ---------------------------------------------------------------
 
-	AddNotificationIcon(h);
+	if (!AddNotificationIcon(h)) {
+		MessageBoxW(nullptr,
+		            L"Failed to create the system tray icon.\nUse Task Manager to exit if needed.",
+		            L"Studio Brightness ++", MB_ICONWARNING);
+		// Continue — keyboard shortcuts still work without the tray icon.
+	}
 	registerHotkeys(h);
 	startWorker();
 
@@ -605,6 +570,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
+
+    // Shutdown GDI+
+    GdiplusShutdown(gdiplusToken);
 	CoUninitialize();
+	CloseHandle(hSingleInstance);
 	return 0;
 }

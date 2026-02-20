@@ -16,10 +16,10 @@ static const wchar_t vidStr[]           = L"vid_05ac";
 static const wchar_t pidStudioDisplay[] = L"pid_1114"; // Studio Display
 static const wchar_t pidXDR[]           = L"pid_9243"; // Pro Display XDR
 static const wchar_t interfaceStr[]     = L"mi_07";
-static const wchar_t collectionStr[]    = L"&col"; // pour exclure les COLxx
+static const wchar_t collectionStr[]    = L"&col"; // to exclude COLxx subcollections
 
 inline bool icontains(const wchar_t *hay, const wchar_t *needle) {
-	return StrStrIW(hay, needle) != nullptr; // insensible à la casse
+	return StrStrIW(hay, needle) != nullptr; // case-insensitive
 }
 
 /* ---------- globals ---------- */
@@ -72,7 +72,7 @@ int hid_init(DisplayType *outType) {
 
 		const wchar_t *path = det->DevicePath;
 
-		/*** filtre : VID/PID & MI_07 sans &COLxx ***/
+		/*** filter: match VID/PID and MI_07 interface, exclude &COLxx subcollections ***/
 		if (!icontains(path, vidStr))
 			continue;
 		if (icontains(path, collectionStr))
@@ -142,34 +142,34 @@ int hid_init(DisplayType *outType) {
 	}
 
 	SetupDiDestroyDeviceInfoList(set);
-	return -10; // rien trouvé
+	return -10; // no matching device found
 }
 
 /* ============================================================ */
 /* -------------------- GET / SET / RANGE  -------------------  */
 int hid_getBrightness(ULONG *val) {
-	if (hDev == INVALID_HANDLE_VALUE)
+	if (hDev == INVALID_HANDLE_VALUE || inCaps.len == 0)
 		return -1;
-	uint8_t buf[100]{};
+	std::vector<uint8_t> buf(inCaps.len, 0);
 	buf[0] = inCaps.id;
-	if (!HidD_GetInputReport(hDev, buf, sizeof(buf)))
+	if (!HidD_GetInputReport(hDev, buf.data(), (ULONG)buf.size()))
 		return -2;
-	NTSTATUS s = HidP_GetUsageValue(HidP_Input, inCaps.page, 0, inCaps.usage, val, prep, reinterpret_cast<PCHAR>(buf),
-	                                inCaps.len);
+	NTSTATUS s = HidP_GetUsageValue(HidP_Input, inCaps.page, 0, inCaps.usage, val, prep,
+	                                reinterpret_cast<PCHAR>(buf.data()), inCaps.len);
 	return (s == HIDP_STATUS_SUCCESS) ? 0 : -3;
 }
 int hid_setBrightness(ULONG v) {
-	if (hDev == INVALID_HANDLE_VALUE)
+	if (hDev == INVALID_HANDLE_VALUE || featCaps.len == 0)
 		return -1;
-	uint8_t buf[100]{};
+	std::vector<uint8_t> buf(featCaps.len, 0);
 	buf[0] = featCaps.id;
-	if (!HidD_GetFeature(hDev, buf, sizeof(buf)))
+	if (!HidD_GetFeature(hDev, buf.data(), (ULONG)buf.size()))
 		return -2;
 	NTSTATUS s = HidP_SetUsageValue(HidP_Feature, featCaps.page, 0, featCaps.usage, v, prep,
-	                                reinterpret_cast<PCHAR>(buf), featCaps.len);
+	                                reinterpret_cast<PCHAR>(buf.data()), featCaps.len);
 	if (s != HIDP_STATUS_SUCCESS)
 		return -3;
-	return HidD_SetFeature(hDev, buf, featCaps.len) ? 0 : -4;
+	return HidD_SetFeature(hDev, buf.data(), featCaps.len) ? 0 : -4;
 }
 int hid_getBrightnessRange(ULONG *mn, ULONG *mx) {
 	if (!prep || hDev == INVALID_HANDLE_VALUE)
