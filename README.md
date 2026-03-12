@@ -39,6 +39,10 @@
 - **Display detection** — the tray menu shows which Apple display is connected
 - Runs in the system tray, lightweight and easy to use
 
+### What's new in v2.1.0?
+
+- **Apple Studio Display gen 2 support:** The app now detects and controls the second-generation Apple Studio Display (PID 0x1118) in addition to the original (PID 0x1114). Both models work identically — no configuration needed.
+
 ### What's new in v2.0.0?
 
 - **On-Screen Display (OSD):** A sleek, Windows 11-style brightness bar appears in the top-left corner whenever you change brightness with a keyboard shortcut. Can be disabled in Options.
@@ -125,7 +129,7 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 
 - If no ambient light sensor is present or accessible, only manual brightness control is available.
 - ALS auto-brightness is not available on the Pro Display XDR (Windows driver limitation).
-- Only tested with the Apple Studio Display and Apple Pro Display XDR. Other monitors are not supported.
+- Tested with Apple Studio Display (gen 1 & gen 2) and Apple Pro Display XDR. Other monitors are not supported.
 - The application does **not** adjust color temperature or other display parameters.
 
 ---

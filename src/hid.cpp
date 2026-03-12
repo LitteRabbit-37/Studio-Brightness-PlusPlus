@@ -13,7 +13,8 @@
 
 /* ---------- Apple Studio Display ---------- */
 static const wchar_t vidStr[]           = L"vid_05ac";
-static const wchar_t pidStudioDisplay[] = L"pid_1114"; // Studio Display
+static const wchar_t pidStudioDisplay[] = L"pid_1114"; // Studio Display (gen 1)
+static const wchar_t pidStudioDisplayV2[] = L"pid_1118"; // Studio Display (gen 2)
 static const wchar_t pidXDR[]           = L"pid_9243"; // Pro Display XDR
 static const wchar_t interfaceStr[]     = L"mi_07";
 static const wchar_t collectionStr[]    = L"&col"; // to exclude COLxx subcollections
@@ -80,7 +81,7 @@ int hid_init(DisplayType *outType) {
 
 		// Check for specific PIDs
 		DisplayType foundType = DisplayType::None;
-		if (icontains(path, pidStudioDisplay)) {
+		if (icontains(path, pidStudioDisplay) || icontains(path, pidStudioDisplayV2)) {
 			foundType = DisplayType::StudioDisplay;
 		} else if (icontains(path, pidXDR)) {
 			foundType = DisplayType::ProXDR;
