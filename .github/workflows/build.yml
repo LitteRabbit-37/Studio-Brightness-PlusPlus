@@ -15,3 +15,9 @@ jobs:
       - name: Build
         shell: cmd
         run: build.bat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-brightness-plusplus
+          path: bin/studio-brightness-plusplus.exe
