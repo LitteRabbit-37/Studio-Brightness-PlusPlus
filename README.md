@@ -30,46 +30,55 @@
 
 ### What is it?
 
-**Studio brightness ++** is a small Windows utility for controlling the brightness of an Apple Studio Display or Pro Display XDR:
+**Studio brightness ++** is a small Windows utility for controlling the brightness of Apple displays:
 
-- **Automatic brightness adjustment** based on ambient light (ALS sensor)
+- **Automatic brightness adjustment** based on ambient light (ALS sensor) via async callbacks
+- **Multi-display support** to control all connected Apple displays with linked brightness
 - **Manual brightness control** via the native keyboard brightness keys (the "sun" keys, Fn+F1/F2, or QMK/VIA custom keys)
-- **On-Screen Display (OSD)** — a modern brightness indicator shown on key presses
-- **Tray brightness slider** — left-click the tray icon to instantly adjust brightness
-- **Display detection** — the tray menu shows which Apple display is connected
+- **On-Screen Display (OSD)** showing a modern brightness indicator on key presses
+- **Tray brightness slider** for instant adjustment by left-clicking the tray icon
+- **Display detection** showing connected Apple display(s) in the tray menu
+- **Log viewer** with real-time diagnostics accessible from the tray menu
+- **Generic Apple display support** for unknown Apple displays with valid HID brightness caps
 - Runs in the system tray, lightweight and easy to use
 
-### What's new in v2.0.0?
+### Supported displays
 
-- **On-Screen Display (OSD):** A sleek, Windows 11-style brightness bar appears in the top-left corner whenever you change brightness with a keyboard shortcut. Can be disabled in Options.
-- **Tray brightness slider:** Left-click the tray icon to open a mini slider popup for quick manual adjustment. Right-click still opens the context menu.
-- **Display detection in tray menu:** The context menu now shows which Apple display is detected (Studio Display or Pro Display XDR) with a live connection indicator.
-- **Modernized UI:** Refreshed overall look and feel across all interface components.
+| Display | PID | ALS |
+|---|---|---|
+| Apple Studio Display | 0x1114 | Built-in |
+| Apple Studio Display (Gen 2) | 0x1118 | Built-in |
+| Apple Studio Display XDR | 0x1116 | No |
+| Apple Pro Display XDR | 0x9243 | No |
+| Other Apple displays (VID 05AC) | Auto-detected | Depends |
 
-### What was added in v1.5.0?
-
-- **Apple Pro Display XDR support:** The app now detects and controls the Pro Display XDR (PID 9243) in addition to the Studio Display. The XDR's ALS sensor is intentionally bypassed (it causes a hang on Windows) — auto-brightness falls back to a fixed lux value.
-
-### Full feature set
+### Features
 
 Compared to the original [studio-brightness](https://github.com/sfjohnson/studio-brightness), this fork adds:
 
-- **Automatic brightness (ALS)** with deadband/hysteresis to avoid micro-adjustments for tiny ambient light changes. Toggle from the tray menu.
+- **Multi-display support** to detect and control all connected Apple displays together (linked brightness).
+- **Automatic brightness (ALS)** via `ISensorEvents` async callbacks with deadband/hysteresis. Toggle from the tray menu.
+- **ALS sensor correlation** matching sensors to displays via ContainerId for accurate per-display ambient light readings.
 - **Native brightness key support** (Fn+F1/F2 / sun keys, or your QMK/VIA keys).
 - **Custom global shortcuts** via an Options dialog. Includes a "Reset to Defaults" button.
-- **On-Screen Display (OSD)** — dismisses automatically after 2.5 seconds.
-- **Tray brightness slider** — quick adjustment without opening a dialog.
-- **Display detection** — tray menu shows the detected display and its connection status.
-- **Apple Pro Display XDR support** (PID 9243).
-- **Settings persistence** — all options saved to Windows Registry and restored on restart.
-- **Run at Windows startup** — optional auto-launch setting.
-- **Revised device detection** (`hid.cpp` rewritten) for robust HID matching.
+- **On-Screen Display (OSD)** that dismisses automatically after 2.5 seconds.
+- **Tray brightness slider** for quick adjustment without opening a dialog.
+- **Display detection** showing connected display(s) and connection status in the tray menu.
+- **Log viewer** with real-time log window and copy-to-clipboard, accessible via tray menu "Logs...".
+- **Generic fallback** for unknown Apple displays (VID 05AC) with valid HID brightness Feature caps.
+- **Apple Pro Display XDR support** (PID 0x9243).
+- **Apple Studio Display Gen 2 support** (PID 0x1118).
+- **Apple Studio Display XDR support** (PID 0x1116).
+- **Settings persistence** with all options saved to Windows Registry and restored on restart.
+- **Run at Windows startup** as an optional auto-launch setting.
+- **Robust device detection** with profile-based matching, ContainerId correlation, and automatic reconnection.
 
 ### Credits
 
 - **Original author:** [Sam Johnson (sfjohnson)](https://github.com/sfjohnson) ([studio-brightness](https://github.com/sfjohnson/studio-brightness))
-- **Modifications, HID improvements, ALS/auto-brightness, native key support, OSD, tray slider, display detection:** @LitteRabbit-37
-- **XDR support and ALS bypass:** @sse1234
+- **Modifications, HID improvements, ALS/auto-brightness, native key support, OSD, tray slider, display detection, multi-display, log viewer:** @LitteRabbit-37
+- **XDR support:** @sse1234
+- **Studio Display Gen 2 & Studio Display XDR PID identification:** @oskarjiang
 
 ### Prerequisites
 
@@ -83,25 +92,26 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 - **Decrease brightness:** Use your keyboard's native brightness down key (sun/F1) or a custom shortcut (if enabled).
 - **Quick slider:** Left-click the tray icon to open the brightness slider popup.
 - **Automatic brightness:** If you have a compatible ambient light sensor, the app auto-adjusts brightness. Right-click the tray icon to toggle "Automatic Brightness".
-- **Options…:** Right-click the tray icon → "Options…". You can:
+- **Options...:** Right-click the tray icon > "Options...". You can:
   - Toggle automatic brightness
   - Toggle the On-Screen Display (OSD)
   - Enable "Run at Windows startup"
   - Enable custom shortcuts and set Increase/Decrease keys
-  - Set the number of brightness steps (10–50)
+  - Set the number of brightness steps (10-50)
   - Click "Reset to Defaults" to restore default settings
   - All settings are automatically saved to the Windows Registry
+- **Logs...:** Right-click the tray icon > "Logs..." to open the real-time log viewer. Useful for diagnostics and troubleshooting.
 - **Quit:** Right-click the tray icon and select "Quit".
 
 ## Building
 
 ### Prerequisites
 
-- Visual Studio tools (Developer Command Prompt with `cl.exe` and `rc.exe` in PATH)
+- Visual Studio 2022 Build Tools (or Community/Professional/Enterprise)
 
 ### Using build.bat
 
-1. Open a **x64 Developer Command Prompt for VS**
+1. Open any terminal (the build script auto-detects the VS environment)
 2. Go to the project directory
 3. Run:
 
@@ -113,19 +123,20 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 
 ## Technical notes
 
-- **`hid.cpp`** was rewritten to reliably detect Apple displays by VID/PID on the `mi_07` interface, excluding HID subcollections (`&col`).
-- Brightness step changes default to **10 steps** across the detected range (configurable 10–50).
+- **`hid.cpp`** uses profile-based detection with Apple VID/PID matching, excluding HID subcollections (`&col`). Unknown Apple displays fall back to generic mode if Feature caps are valid.
+- **Multi-display:** All detected displays share linked brightness. The worker thread manages device lifecycle with automatic reconnection.
+- **ALS:** Uses `ISensorEvents` async callbacks (no polling) for ambient light data. Sensors are correlated to displays via `DEVPKEY_Device_ContainerId`.
+- Brightness step changes default to **10 steps** across the detected range (configurable 10-50).
 - ALS auto-adjust uses a deadband of `max(3% of range, 1500 units)` and smooths toward the target in small increments (2%/step, minimum 500 units).
 - Brightness key events are captured via HID RawInput (Consumer Control page). Custom global hotkeys use `RegisterHotKey`.
-- **OSD** is rendered via GDI+ as a layered (per-pixel alpha) window — no focus theft, passes clicks through.
+- **OSD** is rendered via GDI+ as a layered (per-pixel alpha) window -- no focus theft, passes clicks through.
 - **Settings persistence:** All options stored in `HKEY_CURRENT_USER\Software\StudioBrightnessPlusPlus`. Run-at-startup uses `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
-- **Pro Display XDR:** ALS is disabled for XDR (causes a hang on Windows); auto-brightness defaults to 100 lux when XDR is detected.
+- **Log viewer:** Ring buffer (2000 entries) with SRWLOCK, refreshed every 200ms via timer.
 
 ## Known limitations
 
 - If no ambient light sensor is present or accessible, only manual brightness control is available.
-- ALS auto-brightness is not available on the Pro Display XDR (Windows driver limitation).
-- Only tested with the Apple Studio Display and Apple Pro Display XDR. Other monitors are not supported.
+- Only tested with the Apple Studio Display and Apple Pro Display XDR. Other Apple monitors may work via generic fallback.
 - The application does **not** adjust color temperature or other display parameters.
 
 ---
