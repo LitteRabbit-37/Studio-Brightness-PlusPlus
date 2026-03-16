@@ -104,13 +104,24 @@ int DisplayDevice::setBrightness(ULONG v) {
 int DisplayDevice::getBrightnessRange(ULONG *mn, ULONG *mx) {
 	if (!prep || hDev == INVALID_HANDLE_VALUE)
 		return -1;
-	HIDP_VALUE_CAPS v{};
-	USHORT          len = 1;
-	if (HidP_GetValueCaps(HidP_Feature, &v, &len, prep) != HIDP_STATUS_SUCCESS || len == 0)
+	// Use the stored featCaps (already resolved to the correct brightness cap)
+	HIDP_CAPS caps{};
+	if (HidP_GetCaps(prep, &caps) != HIDP_STATUS_SUCCESS)
 		return -2;
-	*mn = v.LogicalMin;
-	*mx = v.LogicalMax;
-	return 0;
+	USHORT numVals = caps.NumberFeatureValueCaps;
+	if (numVals == 0) return -2;
+	std::vector<HIDP_VALUE_CAPS> vcaps(numVals);
+	if (HidP_GetValueCaps(HidP_Feature, vcaps.data(), &numVals, prep) != HIDP_STATUS_SUCCESS)
+		return -2;
+	for (USHORT i = 0; i < numVals; ++i) {
+		USAGE u = vcaps[i].IsRange ? vcaps[i].Range.UsageMin : vcaps[i].NotRange.Usage;
+		if (vcaps[i].UsagePage == featCaps.page && u == featCaps.usage) {
+			*mn = vcaps[i].LogicalMin;
+			*mx = vcaps[i].LogicalMax;
+			return 0;
+		}
+	}
+	return -2;
 }
 
 /* ============================================================ */
@@ -185,21 +196,60 @@ std::vector<DisplayDevice> hid_enumerate() {
 
 		dev.featCaps.len = caps.FeatureReportByteLength;
 
-		// Validate Feature value caps (required for brightness control)
-		HIDP_VALUE_CAPS v[4]{};
-		USHORT vlen = 4;
-		NTSTATUS vcStatus = HidP_GetValueCaps(HidP_Feature, v, &vlen, dev.prep);
-		if (vcStatus != HIDP_STATUS_SUCCESS || vlen == 0 || v[0].ReportCount != 1) {
-			Log::Warn(L"  Feature value caps invalid (status=0x%08X, count=%u, reportCount=%u, featLen=%u), skipping",
-			          (unsigned)vcStatus, (unsigned)vlen,
-			          vlen > 0 ? (unsigned)v[0].ReportCount : 0,
-			          (unsigned)caps.FeatureReportByteLength);
+		// Enumerate all Feature value caps and find the brightness control
+		USHORT numFeatVals = caps.NumberFeatureValueCaps;
+		if (numFeatVals == 0) {
+			Log::Info(L"  No Feature value caps, skipping");
 			dev.close();
 			continue;
 		}
-		dev.featCaps.id    = v[0].ReportID;
-		dev.featCaps.page  = v[0].UsagePage;
-		dev.featCaps.usage = v[0].NotRange.Usage;
+		std::vector<HIDP_VALUE_CAPS> vcaps(numFeatVals);
+		NTSTATUS vcStatus = HidP_GetValueCaps(HidP_Feature, vcaps.data(), &numFeatVals, dev.prep);
+		if (vcStatus != HIDP_STATUS_SUCCESS) {
+			Log::Warn(L"  HidP_GetValueCaps failed (0x%08X), skipping", (unsigned)vcStatus);
+			dev.close();
+			continue;
+		}
+
+		// Log all Feature value caps for diagnostics
+		for (USHORT vi = 0; vi < numFeatVals; ++vi) {
+			auto &vc = vcaps[vi];
+			USAGE u = vc.IsRange ? vc.Range.UsageMin : vc.NotRange.Usage;
+			Log::Info(L"  ValueCap[%u]: Page=0x%04X Usage=0x%04X ReportID=0x%02X BitSize=%u ReportCount=%u LogMin=%ld LogMax=%ld",
+			          vi, vc.UsagePage, u, vc.ReportID, vc.BitSize, vc.ReportCount,
+			          vc.LogicalMin, vc.LogicalMax);
+		}
+
+		// Search for brightness: UsagePage 0x0082 (Monitor), Usage 0x0010 (Brightness)
+		// Fallback: any cap with ReportCount==1 and reasonable LogicalMax (>= 400)
+		int brightIdx = -1;
+		int fallbackIdx = -1;
+		for (USHORT vi = 0; vi < numFeatVals; ++vi) {
+			auto &vc = vcaps[vi];
+			USAGE u = vc.IsRange ? vc.Range.UsageMin : vc.NotRange.Usage;
+			if (vc.UsagePage == 0x0082 && u == 0x0010) {
+				brightIdx = vi;
+				break;
+			}
+			if (fallbackIdx < 0 && vc.ReportCount == 1 && vc.LogicalMax >= 400)
+				fallbackIdx = vi;
+		}
+		int chosen = (brightIdx >= 0) ? brightIdx : fallbackIdx;
+		if (chosen < 0) {
+			Log::Warn(L"  No brightness value cap found among %u caps, skipping", numFeatVals);
+			dev.close();
+			continue;
+		}
+		if (brightIdx >= 0) {
+			Log::Info(L"  Matched brightness cap by UsagePage/Usage (index %d)", chosen);
+		} else {
+			Log::Info(L"  Using fallback cap (index %d), no exact brightness match", chosen);
+		}
+
+		auto &bc = vcaps[chosen];
+		dev.featCaps.id    = bc.ReportID;
+		dev.featCaps.page  = bc.UsagePage;
+		dev.featCaps.usage = bc.IsRange ? bc.Range.UsageMin : bc.NotRange.Usage;
 
 		// Assign type and name
 		if (profile) {
