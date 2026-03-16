@@ -19,7 +19,8 @@ DEFINE_DEVPROPKEY(SBPP_DEVPKEY_Device_ContainerId,
 
 /* ---------- Apple vendor ID ---------- */
 static const wchar_t kAppleVid[]     = L"vid_05ac";
-static const wchar_t kColFilter[]    = L"&col";
+// kColFilter removed: some displays (e.g. Studio Display XDR) expose
+// brightness via a HID collection, not the top-level interface.
 
 inline bool icontains(const wchar_t *hay, const wchar_t *needle) {
 	return StrStrIW(hay, needle) != nullptr;
@@ -149,10 +150,6 @@ std::vector<DisplayDevice> hid_enumerate() {
 		if (!icontains(path, kAppleVid))
 			continue;
 
-		// Filter: skip &COLxx subcollections
-		if (icontains(path, kColFilter))
-			continue;
-
 		uint16_t pid = extractPid(path);
 		const DisplayProfile *profile = findProfileByPid(pid);
 
@@ -191,9 +188,12 @@ std::vector<DisplayDevice> hid_enumerate() {
 		// Validate Feature value caps (required for brightness control)
 		HIDP_VALUE_CAPS v[4]{};
 		USHORT vlen = 4;
-		if (HidP_GetValueCaps(HidP_Feature, v, &vlen, dev.prep) != HIDP_STATUS_SUCCESS ||
-		    vlen == 0 || v[0].ReportCount != 1) {
-			Log::Warn(L"  Feature value caps invalid, skipping");
+		NTSTATUS vcStatus = HidP_GetValueCaps(HidP_Feature, v, &vlen, dev.prep);
+		if (vcStatus != HIDP_STATUS_SUCCESS || vlen == 0 || v[0].ReportCount != 1) {
+			Log::Warn(L"  Feature value caps invalid (status=0x%08X, count=%u, reportCount=%u, featLen=%u), skipping",
+			          (unsigned)vcStatus, (unsigned)vlen,
+			          vlen > 0 ? (unsigned)v[0].ReportCount : 0,
+			          (unsigned)caps.FeatureReportByteLength);
 			dev.close();
 			continue;
 		}
@@ -213,6 +213,23 @@ std::vector<DisplayDevice> hid_enumerate() {
 
 		// Query ContainerId
 		dev.containerId = queryContainerId(set, &devInfo);
+
+		// Deduplicate: skip if we already have a device with the same ContainerId
+		static const GUID emptyGuid = {};
+		if (memcmp(&dev.containerId, &emptyGuid, sizeof(GUID)) != 0) {
+			bool dup = false;
+			for (const auto &existing : result) {
+				if (memcmp(&existing.containerId, &dev.containerId, sizeof(GUID)) == 0) {
+					dup = true;
+					break;
+				}
+			}
+			if (dup) {
+				Log::Info(L"  Duplicate ContainerId, skipping (already opened via another interface)");
+				dev.close();
+				continue;
+			}
+		}
 
 		Log::Info(L"  Opened: %s [Feature ID=0x%02X]",
 		          dev.name.c_str(), dev.featCaps.id);
