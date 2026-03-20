@@ -24,6 +24,7 @@ struct DisplayProfile {
 	uint16_t     pid;
 	DisplayType  type;
 	const wchar_t *name;
+	float        maxNits;
 };
 
 /* ---------- Per-device state ---------- */
@@ -52,6 +53,9 @@ struct DisplayDevice {
 	// Per-device ALS state
 	float baseLux = 100.f;
 
+	// Nit calibration for proportional brightness matching
+	float maxNits = 600.f;
+
 	DisplayDevice() = default;
 	~DisplayDevice() { close(); }
 
@@ -63,7 +67,8 @@ struct DisplayDevice {
 	      type(o.type), name(std::move(o.name)), devicePath(std::move(o.devicePath)),
 	      containerId(o.containerId), currentBrightness(o.currentBrightness),
 	      baseBrightness(o.baseBrightness),
-	      minBrightness(o.minBrightness), maxBrightness(o.maxBrightness), baseLux(o.baseLux) {
+	      minBrightness(o.minBrightness), maxBrightness(o.maxBrightness), baseLux(o.baseLux),
+	      maxNits(o.maxNits) {
 		o.hDev = INVALID_HANDLE_VALUE;
 		o.prep = nullptr;
 	}
@@ -76,7 +81,7 @@ struct DisplayDevice {
 			containerId = o.containerId;
 			currentBrightness = o.currentBrightness; baseBrightness = o.baseBrightness;
 			minBrightness = o.minBrightness; maxBrightness = o.maxBrightness;
-			baseLux = o.baseLux;
+			baseLux = o.baseLux; maxNits = o.maxNits;
 			o.hDev = INVALID_HANDLE_VALUE;
 			o.prep = nullptr;
 		}

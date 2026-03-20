@@ -19,8 +19,12 @@ struct AppSettings {
     ULONG             brightnessSteps{10};
 
     // User Interface
-    bool showOSD{true};  // New setting for OSD
+    bool showOSD{true};
     bool runAtStartup{false};
+
+    // Multi-display
+    bool  linkedMode{true};
+    ULONG activeDisplayIndex{0};
 
     // Input / Hotkeys
     bool       enableCustomHotkeys{false};

@@ -37,7 +37,10 @@ void AppSettings::Load() {
         
         DWORD steps = GetRegDWORD(hKey, L"BrightnessSteps", 10);
         brightnessSteps = std::clamp(steps, kMinBrightnessSteps, kMaxBrightnessSteps);
-        
+
+        linkedMode = (GetRegDWORD(hKey, L"LinkedMode", 1) != 0);
+        activeDisplayIndex = GetRegDWORD(hKey, L"ActiveDisplayIndex", 0);
+
         RegCloseKey(hKey);
     }
 }
@@ -58,7 +61,10 @@ void AppSettings::Save() {
         SetRegDWORD(hKey, L"HotkeyDownVK", hkDown.vk);
         
         SetRegDWORD(hKey, L"BrightnessSteps", brightnessSteps);
-        
+
+        SetRegDWORD(hKey, L"LinkedMode", linkedMode ? 1 : 0);
+        SetRegDWORD(hKey, L"ActiveDisplayIndex", activeDisplayIndex);
+
         RegCloseKey(hKey);
     }
 }

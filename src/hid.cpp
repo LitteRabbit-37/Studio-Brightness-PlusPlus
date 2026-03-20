@@ -28,10 +28,10 @@ inline bool icontains(const wchar_t *hay, const wchar_t *needle) {
 
 /* ---------- Known display profiles ---------- */
 static const DisplayProfile kProfiles[] = {
-	{0x1114, DisplayType::StudioDisplay,  L"Studio Display"        },
-	{0x1118, DisplayType::StudioDisplay2, L"Studio Display (Gen 2)"},
-	{0x1116, DisplayType::StudioXDR,      L"Studio Display XDR"    },
-	{0x9243, DisplayType::ProXDR,         L"Pro Display XDR"       },
+	{0x1114, DisplayType::StudioDisplay,  L"Studio Display",          600.f},
+	{0x1118, DisplayType::StudioDisplay2, L"Studio Display (Gen 2)",  600.f},
+	{0x1116, DisplayType::StudioXDR,      L"Studio Display XDR",     1000.f},
+	{0x9243, DisplayType::ProXDR,         L"Pro Display XDR",        1000.f},
 };
 
 static const DisplayProfile *findProfileByPid(uint16_t pid) {
@@ -253,11 +253,13 @@ std::vector<DisplayDevice> hid_enumerate() {
 
 		// Assign type and name
 		if (profile) {
-			dev.type = profile->type;
-			dev.name = profile->name;
+			dev.type    = profile->type;
+			dev.name    = profile->name;
+			dev.maxNits = profile->maxNits;
 		} else {
-			dev.type = DisplayType::AppleGeneric;
-			dev.name = L"Apple Display (Unknown)";
+			dev.type    = DisplayType::AppleGeneric;
+			dev.name    = L"Apple Display (Unknown)";
+			dev.maxNits = 600.f;
 			Log::Warn(L"  PID 0x%04X not in profiles, using generic mode", pid);
 		}
 

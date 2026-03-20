@@ -6,6 +6,8 @@
 #define IDM_CHECK_UPDATE     127
 #define IDM_VERSION_INFO     128
 #define IDM_SHOW_LOGS        129
+#define IDM_LINKED_MODE      130
+#define IDM_SELECT_DISPLAY   2000  // 2000 + i for display selection
 #define IDI_MYICON           201
 #define IDI_NOTIFICATIONICON 207
 #define IDC_NOTIFICATIONICON 208

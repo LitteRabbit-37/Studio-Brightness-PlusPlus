@@ -44,7 +44,7 @@ constexpr UINT    WMAPP_NOTIFYCALLBACK = WM_APP + 1;
 constexpr wchar_t kWndClass[]          = L"StudioBrightnessClass";
 
 constexpr wchar_t kReleaseUrl[] = L"https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus/releases";
-constexpr wchar_t kAppVersion[] = L"2.1.1";
+constexpr wchar_t kAppVersion[] = L"2.1.2";
 
 /* ---------- system tray icon GUID ---------- */
 DEFINE_GUID(GUID_PrinterIcon, 0x9d0b8b92, 0x4e1c, 0x488e, 0xa1, 0xe1, 0x23, 0x31, 0xaf, 0xce, 0x2c, 0xb5);
@@ -347,12 +347,38 @@ static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool
 	}
 }
 
-// Apply brightness to all connected displays (linked mode)
-static void SetBrightnessAll(ULONG val, bool isUserAction, bool showOSD) {
-	std::lock_guard<std::mutex> lock(g_displayMutex);
+// Map a brightness value from one display's range to another using nit calibration.
+// This ensures perceived brightness matches across displays with different nit ceilings.
+static ULONG mapBrightnessAcrossDisplays(ULONG val, const DisplayDevice &from, const DisplayDevice &to) {
+	if (from.maxNits == to.maxNits && from.maxBrightness == to.maxBrightness && from.minBrightness == to.minBrightness)
+		return val;
+	float fromRange = (float)(from.maxBrightness - from.minBrightness);
+	if (fromRange <= 0.f) return val;
+	float pct  = (float)(val - from.minBrightness) / fromRange;
+	float nits = pct * from.maxNits;
+	float toPct = std::clamp(nits / to.maxNits, 0.f, 1.f);
+	return to.minBrightness + (ULONG)(toPct * (float)(to.maxBrightness - to.minBrightness));
+}
+
+// Apply brightness to all connected displays (linked mode, proportional nit mapping)
+static void SetBrightnessLinked(ULONG val, const DisplayDevice &refDev, bool isUserAction, bool showOSD) {
 	for (auto &dev : g_displays) {
-		// Map val from first display's range to this display's range
-		SetBrightness(dev, val, isUserAction, showOSD);
+		ULONG mapped = mapBrightnessAcrossDisplays(val, refDev, dev);
+		SetBrightness(dev, mapped, isUserAction, showOSD);
+	}
+}
+
+// Apply brightness change based on current mode (linked or single display)
+static void ApplyBrightness(ULONG val, bool isUserAction, bool showOSD) {
+	std::lock_guard<std::mutex> lock(g_displayMutex);
+	if (g_displays.empty()) return;
+
+	if (g_settings.linkedMode || g_displays.size() == 1) {
+		ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+		SetBrightnessLinked(val, g_displays[idx], isUserAction, showOSD);
+	} else {
+		ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+		SetBrightness(g_displays[idx], val, isUserAction, showOSD);
 	}
 }
 
@@ -361,8 +387,8 @@ static void adjustBrightnessByStep(int direction) {
 	std::lock_guard<std::mutex> lock(g_displayMutex);
 	if (g_displays.empty()) return;
 
-	// Use first display as reference
-	auto &ref = g_displays[0];
+	ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+	auto &ref = g_displays[idx];
 	ULONG step = (ref.maxBrightness - ref.minBrightness) / g_settings.brightnessSteps;
 	if (step < 1) step = 1;
 
@@ -380,8 +406,11 @@ static void adjustBrightnessByStep(int direction) {
 	}
 
 	if (newBrightness != ref.currentBrightness) {
-		for (auto &dev : g_displays)
-			SetBrightness(dev, newBrightness, true, true);
+		if (g_settings.linkedMode || g_displays.size() == 1) {
+			SetBrightnessLinked(newBrightness, ref, true, true);
+		} else {
+			SetBrightness(ref, newBrightness, true, true);
+		}
 	}
 }
 
@@ -531,7 +560,8 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			{
 				std::lock_guard<std::mutex> lock(g_displayMutex);
 				if (g_displays.empty()) return 0;
-				auto &ref = g_displays[0];
+				ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+				auto &ref = g_displays[idx];
 				int range = ref.maxBrightness - ref.minBrightness;
 				if (range <= 0) range = 1;
 				pct    = (int)((float)(ref.currentBrightness - ref.minBrightness) / (float)range * 100.0f);
@@ -542,7 +572,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			TrayPopup::Show(h, pct, [refMin, refMax](int newPct) {
 				ULONG r   = refMax - refMin;
 				ULONG val = refMin + (ULONG)((float)r * (float)newPct / 100.0f);
-				SetBrightnessAll(val, true, false);
+				ApplyBrightness(val, true, false);
 			});
 			return 0;
 		}
@@ -553,14 +583,23 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			std::wstring statusLine = buildDisplayStatusLine();
 			AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, statusLine.c_str());
 
-			// Sub-list of individual displays (only when multiple)
+			// Display list with selection (only when multiple)
 			{
 				std::lock_guard<std::mutex> lock(g_displayMutex);
 				if (g_displays.size() > 1) {
+					ULONG activeIdx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
 					for (size_t i = 0; i < g_displays.size(); ++i) {
-						std::wstring item = L"    " + g_displays[i].name;
-						AppendMenuW(hMenu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, item.c_str());
+						std::wstring item = L"    \U0001F7E2 " + g_displays[i].name;
+						UINT flags = MF_STRING;
+						if (g_settings.linkedMode) {
+							flags |= MF_CHECKED | MF_GRAYED;
+						} else {
+							flags |= (i == activeIdx) ? MF_CHECKED : MF_UNCHECKED;
+						}
+						AppendMenuW(hMenu, flags, IDM_SELECT_DISPLAY + i, item.c_str());
 					}
+					AppendMenuW(hMenu, MF_STRING | (g_settings.linkedMode ? MF_CHECKED : 0),
+					            IDM_LINKED_MODE, L"Linked Displays");
 				}
 			}
 
@@ -584,6 +623,12 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 
 			if (cmd == IDM_TOGGLE_AUTO) {
 				g_settings.autoAdjustEnabled.store(!g_settings.autoAdjustEnabled.load());
+				g_settings.Save();
+			} else if (cmd == IDM_LINKED_MODE) {
+				g_settings.linkedMode = !g_settings.linkedMode;
+				g_settings.Save();
+			} else if (cmd >= IDM_SELECT_DISPLAY && cmd < IDM_SELECT_DISPLAY + 16) {
+				g_settings.activeDisplayIndex = (ULONG)(cmd - IDM_SELECT_DISPLAY);
 				g_settings.Save();
 			} else if (cmd == IDM_OPTIONS) {
 				DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
