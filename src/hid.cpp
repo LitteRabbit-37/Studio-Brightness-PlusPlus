@@ -126,6 +126,11 @@ int DisplayDevice::getBrightnessRange(ULONG *mn, ULONG *mx) {
 
 /* ============================================================ */
 std::vector<DisplayDevice> hid_enumerate() {
+	struct Candidate {
+		DisplayDevice dev;
+		bool exactMatch;
+	};
+	std::vector<Candidate> candidates;
 	std::vector<DisplayDevice> result;
 
 	GUID hidGuid;
@@ -240,7 +245,8 @@ std::vector<DisplayDevice> hid_enumerate() {
 			dev.close();
 			continue;
 		}
-		if (brightIdx >= 0) {
+		bool isExact = (brightIdx >= 0);
+		if (isExact) {
 			Log::Info(L"  Matched brightness cap by UsagePage/Usage (index %d)", chosen);
 		} else {
 			Log::Info(L"  Using fallback cap (index %d), no exact brightness match", chosen);
@@ -266,30 +272,67 @@ std::vector<DisplayDevice> hid_enumerate() {
 		// Query ContainerId
 		dev.containerId = queryContainerId(set, &devInfo);
 
-		// Deduplicate: skip if we already have a device with the same ContainerId
-		static const GUID emptyGuid = {};
-		if (memcmp(&dev.containerId, &emptyGuid, sizeof(GUID)) != 0) {
-			bool dup = false;
-			for (const auto &existing : result) {
-				if (memcmp(&existing.containerId, &dev.containerId, sizeof(GUID)) == 0) {
-					dup = true;
-					break;
+		Log::Info(L"  Candidate: %s [Feature ID=0x%02X, %s]",
+		          dev.name.c_str(), dev.featCaps.id, isExact ? L"exact" : L"fallback");
+
+		candidates.push_back({std::move(dev), isExact});
+	}
+
+	SetupDiDestroyDeviceInfoList(set);
+
+	// Pass 2: per ContainerId, prefer exact match over fallback
+	static const GUID emptyGuid = {};
+	for (auto &c : candidates) {
+		GUID &cid = c.dev.containerId;
+		bool hasContainer = (memcmp(&cid, &emptyGuid, sizeof(GUID)) != 0);
+
+		if (hasContainer) {
+			// Check if we already accepted a device with this ContainerId
+			bool dominated = false;
+			for (size_t ri = 0; ri < result.size(); ++ri) {
+				if (memcmp(&result[ri].containerId, &cid, sizeof(GUID)) != 0)
+					continue;
+				// Same ContainerId: keep the exact match
+				if (c.exactMatch && !result[ri].featCaps.page) {
+					// Shouldn't happen, but safety
+				} else if (c.exactMatch) {
+					// New candidate is exact, existing is fallback: replace
+					Log::Info(L"  Replacing fallback with exact match for %s", c.dev.name.c_str());
+					result[ri] = std::move(c.dev);
+				} else {
+					// Existing is better or equal, skip this one
+					Log::Info(L"  Duplicate ContainerId, skipping %s (better candidate already accepted)",
+					          c.dev.name.c_str());
+					c.dev.close();
+				}
+				dominated = true;
+				break;
+			}
+			if (dominated) continue;
+
+			// Check if a later candidate for the same ContainerId has an exact match
+			bool laterExact = false;
+			if (!c.exactMatch) {
+				for (auto &other : candidates) {
+					if (&other == &c || !other.exactMatch) continue;
+					if (memcmp(&other.dev.containerId, &cid, sizeof(GUID)) == 0) {
+						laterExact = true;
+						break;
+					}
 				}
 			}
-			if (dup) {
-				Log::Info(L"  Duplicate ContainerId, skipping (already opened via another interface)");
-				dev.close();
+			if (laterExact) {
+				Log::Info(L"  Skipping fallback for %s (exact match available)", c.dev.name.c_str());
+				c.dev.close();
 				continue;
 			}
 		}
 
 		Log::Info(L"  Opened: %s [Feature ID=0x%02X]",
-		          dev.name.c_str(), dev.featCaps.id);
-
-		result.push_back(std::move(dev));
+		          c.dev.name.c_str(), c.dev.featCaps.id);
+		result.push_back(std::move(c.dev));
 	}
 
-	SetupDiDestroyDeviceInfoList(set);
 	if (!result.empty())
 		Log::Info(L"Enumeration complete: %zu display(s) found", result.size());
 	return result;
