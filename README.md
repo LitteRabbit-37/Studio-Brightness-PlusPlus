@@ -149,7 +149,8 @@ MPL-2.0 License, following the upstream project's terms.
 
 ## Thanks
 
-<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Someone</b> </div>  <div><i>null</i></div><br>
+<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>CLÉMENT F L DUMAS</b> </div>  <div><i>Studio-Brightness-PlusPlus works great, thanks!</i></div><br>
+<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Someone</b> </div>  <div><i>null</i></div><br>
 <div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>The Naked Dev</b> </div>  <div><i>Absolutely fantastic job, I needed this for years and now its here!</i></div><br><!--END_SECTION:buy-me-a-coffe-->
 
 Many thanks to Sam Johnson for the original work!
