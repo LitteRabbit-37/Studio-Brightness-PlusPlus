@@ -107,7 +107,7 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 
 ### Prerequisites
 
-- Visual Studio 2022 Build Tools (or Community/Professional/Enterprise)
+- Visual Studio 2022 or 2026 Build Tools (or Community/Professional/Enterprise)
 
 ### Using build.bat
 
@@ -115,11 +115,22 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 2. Go to the project directory
 3. Run:
 
-```bash
+```pwsh
 build.bat
 ```
 
 The output will be `bin\studio-brightness-plusplus.exe`.
+
+### CMake
+
+Another way of building is with CMake, that works with Visual Studio, GCC, Clang, Intel oneAPI, etc.
+
+```pwsh
+cmake -B build
+cmake --build build --config Release
+```
+
+The output will be `build\studio-brightness-plusplus.exe`.
 
 ## Technical notes
 

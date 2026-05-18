@@ -10,7 +10,7 @@ jobs:
         runs-on: windows-2022
         steps:
             - name: Checkout
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   persist-credentials: true
 
@@ -20,7 +20,7 @@ jobs:
               run: build.bat
 
             - name: Create release
-              uses: softprops/action-gh-release@v2
+              uses: softprops/action-gh-release@v3
               with:
                   files: bin/studio-brightness-plusplus.exe
               env:
