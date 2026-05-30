@@ -155,3 +155,9 @@ MPL-2.0 License, following the upstream project's terms.
 
 Many thanks to Sam Johnson for the original work!
 Feel free to submit issues, pull requests, or feedback.
+
+## Support
+
+If you find Parla useful and want to support the development, you can buy me a coffee:
+
+<a href="https://www.buymeacoffee.com/litterabbit" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="40" /></a>
