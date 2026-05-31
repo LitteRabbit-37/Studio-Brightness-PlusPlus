@@ -1,0 +1,10 @@
+# Normalize all text files to LF in the repository.
+# Each OS still gets its native line endings in the working tree,
+# so saving on Windows no longer shows every line as "modified".
+* text=auto
+
+# Windows batch scripts must keep CRLF in the working tree.
+*.bat text eol=crlf
+
+# Binary assets: never convert.
+*.ico binary
