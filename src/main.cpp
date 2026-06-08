@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <dbt.h>
 #include <initguid.h>
 #include <sensorsapi.h>
 #include <sensors.h>
@@ -11,6 +12,7 @@
 #include <shlwapi.h>
 #include <portabledevicetypes.h>
 #include <wrl/client.h>
+#include <dxgi1_6.h>
 #include <thread>
 #include <chrono>
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <cwchar>
 #include <atomic>
 #include <mutex>
+#include <map>
 #include <gdiplus.h>
 
 #include "hid.h"
@@ -33,13 +36,16 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "dxgi.lib")
 
 using Microsoft::WRL::ComPtr;
 using namespace Gdiplus;
 
 /* ---------- globals ---------- */
-static HINSTANCE  g_hInst              = nullptr;
-static HWND       g_hMain              = nullptr;
+static HINSTANCE    g_hInst              = nullptr;
+static HWND         g_hMain              = nullptr;
+static HDEVNOTIFY   g_hDevNotify         = nullptr;
+static std::atomic<bool> g_deviceArrived {false}; // set by WM_DEVICECHANGE, cleared by worker
 constexpr UINT    WMAPP_NOTIFYCALLBACK = WM_APP + 1;
 constexpr wchar_t kWndClass[]          = L"StudioBrightnessClass";
 
@@ -50,8 +56,11 @@ constexpr wchar_t kAppVersion[] = L"2.1.2";
 DEFINE_GUID(GUID_PrinterIcon, 0x9d0b8b92, 0x4e1c, 0x488e, 0xa1, 0xe1, 0x23, 0x31, 0xaf, 0xce, 0x2c, 0xb5);
 
 /* ---------- multi-display state ---------- */
-static std::vector<DisplayDevice> g_displays;
-static std::mutex                 g_displayMutex;
+static std::vector<DisplayDevice>    g_displays;
+static std::mutex                    g_displayMutex;
+// Last desired brightness per display name — restored on reconnect (KVM switch etc.)
+// Protected by g_displayMutex.
+static std::map<std::wstring, ULONG> g_savedBrightness;
 
 // GDI+
 static ULONG_PTR gdiplusToken;
@@ -340,6 +349,7 @@ static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool
 			dev.baseBrightness = safeVal;
 			if (safeVal != dev.minBrightness && safeVal != dev.maxBrightness)
 				dev.baseLux = getAmbientLux(dev);
+			g_savedBrightness[dev.name] = safeVal;
 		}
 
 		if (showOSD && g_settings.showOSD)
@@ -644,7 +654,14 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			return 0;
 		}
 	}
+	if (m == WM_DEVICECHANGE && wParam == DBT_DEVICEARRIVAL) {
+		auto *hdr = reinterpret_cast<DEV_BROADCAST_HDR *>(lParam);
+		if (hdr && hdr->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+			g_deviceArrived.store(true, std::memory_order_relaxed);
+		return 0;
+	}
 	if (m == WM_DESTROY) {
+		if (g_hDevNotify) { UnregisterDeviceNotification(g_hDevNotify); g_hDevNotify = nullptr; }
 		cleanupAlsSensors();
 		{
 			std::lock_guard<std::mutex> lock(g_displayMutex);
@@ -676,6 +693,79 @@ bool RegisterHiddenClass() {
 	return true;
 }
 
+/* ---------- HDR state polling ---------- */
+// Uses DXGI to detect per-output HDR state. More reliable than DisplayConfigGetDeviceInfo
+// for Apple displays which don't support the AdvancedColorInfo query (returns 0x57).
+// HDR on = ColorSpace is DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 (HDR10 PQ).
+static void checkHDRState() {
+	ComPtr<IDXGIFactory1> factory;
+	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+		return;
+
+	static std::map<std::wstring, bool> s_hdrState; // DeviceName -> HDR on
+	static bool s_firstRun = true;
+	bool anyOutput = false;
+
+	for (UINT ai = 0; ; ++ai) {
+		ComPtr<IDXGIAdapter> adapter;
+		if (factory->EnumAdapters(ai, &adapter) == DXGI_ERROR_NOT_FOUND)
+			break;
+
+		for (UINT oi = 0; ; ++oi) {
+			ComPtr<IDXGIOutput> output;
+			if (adapter->EnumOutputs(oi, &output) == DXGI_ERROR_NOT_FOUND)
+				break;
+
+			ComPtr<IDXGIOutput6> output6;
+			if (FAILED(output->QueryInterface(IID_PPV_ARGS(&output6))))
+				continue; // IDXGIOutput6 needs Win10 1803+
+
+			DXGI_OUTPUT_DESC1 desc = {};
+			if (FAILED(output6->GetDesc1(&desc)))
+				continue;
+
+			anyOutput = true;
+			std::wstring key = desc.DeviceName; // e.g. \\.\DISPLAY1
+			bool hdrOn = (desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+
+			auto it = s_hdrState.find(key);
+			if (it == s_hdrState.end()) {
+				if (s_firstRun)
+					Log::Info(L"HDR [%s] ColorSpace=%u: %s (initial)",
+					          key.c_str(), (UINT)desc.ColorSpace, hdrOn ? L"ON" : L"OFF");
+				s_hdrState[key] = hdrOn;
+			} else if (it->second != hdrOn) {
+				bool wasHdr = it->second;
+				it->second  = hdrOn;
+				Log::Info(L"HDR [%s]: %s -> %s",
+				          key.c_str(),
+				          wasHdr ? L"ON" : L"OFF",
+				          hdrOn  ? L"ON" : L"OFF");
+
+				// HDR → SDR: restore last saved brightness
+				if (wasHdr && !hdrOn) {
+					std::lock_guard<std::mutex> lock(g_displayMutex);
+					for (auto &dev : g_displays) {
+						auto bit = g_savedBrightness.find(dev.name);
+						if (bit == g_savedBrightness.end()) continue;
+						ULONG saved = std::clamp(bit->second, dev.minBrightness, dev.maxBrightness);
+						Log::Info(L"HDR->SDR: restoring %s brightness to %lu",
+						          dev.name.c_str(), saved);
+						if (dev.setBrightness(saved) == 0) {
+							dev.currentBrightness = saved;
+							dev.baseBrightness    = saved;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (s_firstRun && !anyOutput)
+		Log::Warn(L"HDR: no IDXGIOutput6 found (Win10 1803+ required)");
+	s_firstRun = false;
+}
+
 /* ---------- background worker thread ---------- */
 void startWorker() {
 	std::thread([] {
@@ -685,7 +775,9 @@ void startWorker() {
 		initAlsSensors();
 
 		DWORD lastEnumerateTick = 0;
-		constexpr DWORD kEnumerateCooldownMs = 3000; // re-scan every 3s at most
+		DWORD lastHDRCheckTick  = 0;
+		constexpr DWORD kHDRCheckIntervalMs = 500;
+		constexpr DWORD kEnumerateCooldownMs = 1000; // re-scan every 1s when device absent
 
 		for (;;) {
 			/* ---------- device (re)connection attempt ---------- */
@@ -709,11 +801,14 @@ void startWorker() {
 					    std::remove_if(g_displays.begin(), g_displays.end(),
 					                   [](const DisplayDevice &d) { return !d.isOpen(); }),
 					    g_displays.end());
+					lastEnumerateTick = 0; // bypass cooldown: scan for reconnect immediately
 				}
 
 				// Re-scan for new devices only when needed (empty or device lost)
 				DWORD now = GetTickCount();
-				bool needScan = g_displays.empty() || anyDead;
+				bool arrived = g_deviceArrived.exchange(false, std::memory_order_relaxed);
+				if (arrived) lastEnumerateTick = 0; // bypass cooldown on OS device-arrival event
+				bool needScan = g_displays.empty() || anyDead || arrived;
 				if (needScan && now - lastEnumerateTick >= kEnumerateCooldownMs) {
 					lastEnumerateTick = now;
 
@@ -737,6 +832,26 @@ void startWorker() {
 							newDev.baseBrightness = newDev.currentBrightness;
 							newDev.baseLux = getAmbientLux(newDev);
 						}
+
+						// Reconnect: restore saved brightness (e.g. after KVM switch).
+						// First connection: record current hardware value as baseline.
+						{
+							auto it = g_savedBrightness.find(newDev.name);
+							if (it != g_savedBrightness.end()) {
+								ULONG saved = std::clamp(it->second, newDev.minBrightness, newDev.maxBrightness);
+								if (saved != newDev.currentBrightness) {
+									Log::Info(L"KVM->reconnect: restoring %s brightness to %lu",
+									          newDev.name.c_str(), saved);
+									if (newDev.setBrightness(saved) == 0) {
+										newDev.currentBrightness = saved;
+										newDev.baseBrightness    = saved;
+									}
+								}
+							} else {
+								g_savedBrightness[newDev.name] = newDev.currentBrightness;
+							}
+						}
+
 						Log::Info(L"Device %s ready [range %lu-%lu, current %lu]",
 						          newDev.name.c_str(), newDev.minBrightness, newDev.maxBrightness,
 						          newDev.currentBrightness);
@@ -770,6 +885,14 @@ void startWorker() {
 							SetBrightness(dev, dev.currentBrightness + delta, false, false);
 						}
 					}
+				}
+			}
+			/* ---------- HDR state polling ---------- */
+			{
+				DWORD nowHdr = GetTickCount();
+				if (nowHdr - lastHDRCheckTick >= kHDRCheckIntervalMs) {
+					lastHDRCheckTick = nowHdr;
+					checkHDRState();
 				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -828,6 +951,17 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		MessageBoxW(nullptr, L"RegisterRawInputDevices failed", L"StudioBrightnessPlusPlus", MB_ICONERROR);
 		CloseHandle(hSingleInstance);
 		return 1;
+	}
+
+	// Register for HID device arrival notifications (instant reconnect detection)
+	{
+		DEV_BROADCAST_DEVICEINTERFACE_W dbi = {};
+		dbi.dbcc_size       = sizeof(dbi);
+		dbi.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+		HidD_GetHidGuid(&dbi.dbcc_classguid);
+		g_hDevNotify = RegisterDeviceNotificationW(h,
+		    reinterpret_cast<DEV_BROADCAST_HDR *>(&dbi),
+		    DEVICE_NOTIFY_WINDOW_HANDLE);
 	}
 
 	if (!AddNotificationIcon(h)) {
