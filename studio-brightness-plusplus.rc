@@ -1,9 +1,39 @@
 #include <windows.h>
 #include "resource.h"
+#include "version.h"
 
 IDI_MYICON ICON "studio-brightness-plusplus.ico"
 
-IDD_OPTIONS DIALOGEX 0, 0, 260, 210
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    SBPP_VER_MAJOR,SBPP_VER_MINOR,SBPP_VER_PATCH,SBPP_VER_BUILD
+ PRODUCTVERSION SBPP_VER_MAJOR,SBPP_VER_MINOR,SBPP_VER_PATCH,SBPP_VER_BUILD
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "LitteRabbit-37"
+            VALUE "FileDescription",  "Studio Brightness++"
+            VALUE "FileVersion",      SBPP_VERSION_NARROW
+            VALUE "InternalName",     "studio-brightness-plusplus"
+            VALUE "LegalCopyright",   "Copyright (C) LitteRabbit-37"
+            VALUE "OriginalFilename", "studio-brightness-plusplus.exe"
+            VALUE "ProductName",      "Studio Brightness++"
+            VALUE "ProductVersion",   SBPP_VERSION_NARROW
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDD_OPTIONS DIALOGEX 0, 0, 260, 258
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Options"
 FONT 9, "Segoe UI"
@@ -13,19 +43,23 @@ BEGIN
     CONTROL "Show On-Screen Display",      IDC_SHOW_OSD,        "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 40, 180, 12
     CONTROL "Enable custom shortcuts",     IDC_ENABLE_HOTKEYS,  "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 56, 180, 12
 
-    GROUPBOX "Shortcuts", -1, 6, 72, 248, 72
+    GROUPBOX "Color preset", -1, 6, 72, 248, 42
+    LTEXT    "", IDC_PRESET_DISPLAY_LABEL, 14, 84, 234, 9
+    COMBOBOX IDC_PRESET_COMBO, 14, 95, 234, 120, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT   "Increase:", -1, 14, 88, 44, 10
-    CONTROL "", IDC_HOTKEY_UP,   "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 86, 168, 14
+    GROUPBOX "Shortcuts", -1, 6, 120, 248, 72
 
-    LTEXT   "Decrease:", -1, 14, 108, 44, 10
-    CONTROL "", IDC_HOTKEY_DOWN, "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 106, 168, 14
+    LTEXT   "Increase:", -1, 14, 136, 44, 10
+    CONTROL "", IDC_HOTKEY_UP,   "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 134, 168, 14
 
-    LTEXT   "Brightness steps (10-50):", -1, 8, 154, 90, 10
-    EDITTEXT IDC_BRIGHTNESS_STEPS, 100, 152, 32, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
-    CONTROL  "", IDC_BRIGHTNESS_STEPS_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 120, 152, 11, 14
+    LTEXT   "Decrease:", -1, 14, 156, 44, 10
+    CONTROL "", IDC_HOTKEY_DOWN, "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 154, 168, 14
 
-    PUSHBUTTON     "Reset to Defaults", IDC_RESET_SHORTCUTS, 8, 176, 100, 14
-    DEFPUSHBUTTON  "Save",              IDOK,                148, 176, 48, 14
-    PUSHBUTTON     "Cancel",            IDCANCEL,            202, 176, 48, 14
+    LTEXT   "Brightness steps (10-50):", -1, 8, 202, 90, 10
+    EDITTEXT IDC_BRIGHTNESS_STEPS, 100, 200, 32, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_BRIGHTNESS_STEPS_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 120, 200, 11, 14
+
+    PUSHBUTTON     "Reset to Defaults", IDC_RESET_SHORTCUTS, 8, 224, 100, 14
+    DEFPUSHBUTTON  "Save",              IDOK,                148, 224, 48, 14
+    PUSHBUTTON     "Cancel",            IDCANCEL,            202, 224, 48, 14
 END

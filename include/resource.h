@@ -7,6 +7,9 @@
 #define IDM_VERSION_INFO     128
 #define IDM_SHOW_LOGS        129
 #define IDM_LINKED_MODE      130
+#define IDM_INSTALL_UPDATE   131
+#define IDM_CHANNEL_STABLE   132
+#define IDM_CHANNEL_BETA     133
 #define IDM_SELECT_DISPLAY   2000  // 2000 + i for display selection
 #define IDI_MYICON           201
 #define IDI_NOTIFICATIONICON 207
@@ -26,6 +29,10 @@
 #define IDC_RESET_SHORTCUTS       1201
 #define IDC_BRIGHTNESS_STEPS      1301
 #define IDC_BRIGHTNESS_STEPS_SPIN 1302
+
+// Color preset (Options Dialog)
+#define IDC_PRESET_DISPLAY_LABEL  1401
+#define IDC_PRESET_COMBO          1402
 
 // Hotkey IDs
 #define ID_HOTKEY_UP   4001

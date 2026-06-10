@@ -65,6 +65,14 @@ static GUID queryContainerId(HDEVINFO set, PSP_DEVINFO_DATA devInfo) {
 
 /* ============================================================ */
 void DisplayDevice::close() {
+	if (presetPrep) {
+		HidD_FreePreparsedData(presetPrep);
+		presetPrep = nullptr;
+	}
+	if (hPreset != INVALID_HANDLE_VALUE) {
+		CloseHandle(hPreset);
+		hPreset = INVALID_HANDLE_VALUE;
+	}
 	if (prep) {
 		HidD_FreePreparsedData(prep);
 		prep = nullptr;
@@ -124,6 +132,104 @@ int DisplayDevice::getBrightnessRange(ULONG *mn, ULONG *mx) {
 	return -2;
 }
 
+/* ---------- Color presets (0xFF20 vendor interface) ---------- */
+static bool presetHasFeatureUsage(PHIDP_PREPARSED_DATA prep, USAGE page, USAGE usage, long *logMax) {
+	HIDP_CAPS caps{};
+	if (HidP_GetCaps(prep, &caps) != HIDP_STATUS_SUCCESS)
+		return false;
+	USHORT n = caps.NumberFeatureValueCaps;
+	if (!n)
+		return false;
+	std::vector<HIDP_VALUE_CAPS> v(n);
+	if (HidP_GetValueCaps(HidP_Feature, v.data(), &n, prep) != HIDP_STATUS_SUCCESS)
+		return false;
+	for (auto &c : v) {
+		USAGE u = c.IsRange ? c.Range.UsageMin : c.NotRange.Usage;
+		if (c.UsagePage == page && u == usage) {
+			if (logMax)
+				*logMax = c.LogicalMax;
+			return true;
+		}
+	}
+	return false;
+}
+
+int DisplayDevice::enumeratePresets() {
+	presets.clear();
+	if (hPreset == INVALID_HANDLE_VALUE || !presetPrep)
+		return -1;
+	long lm = 0;
+	presetHasFeatureUsage(presetPrep, 0xFF20, 0x04, &lm);
+	presetCursorMax = lm;
+	long bound = (lm > 0 && lm <= 128) ? lm : 64;
+	for (long i = 0; i < bound; ++i) {
+		// Write the enumeration cursor (0xFF20/0x04). NON-destructive: active preset (0x03) is untouched.
+		std::vector<uint8_t> wr(presetReportLen, 0);
+		wr[0] = 0x04;
+		if (!HidD_GetFeature(hPreset, wr.data(), (ULONG)wr.size()))
+			break;
+		if (HidP_SetUsageValue(HidP_Feature, 0xFF20, 0, 0x04, (ULONG)i, presetPrep,
+		                       reinterpret_cast<PCHAR>(wr.data()), (ULONG)wr.size()) != HIDP_STATUS_SUCCESS)
+			break;
+		if (!HidD_SetFeature(hPreset, wr.data(), (ULONG)wr.size()))
+			break;
+		// Read the cursor preset's validity (0xFF20/0x06) and name (0xFF20/0x08) from report 0x05.
+		std::vector<uint8_t> r5(presetReportLen, 0);
+		r5[0] = 0x05;
+		if (!HidD_GetFeature(hPreset, r5.data(), (ULONG)r5.size()))
+			break;
+		ULONG valid = 0;
+		HidP_GetUsageValue(HidP_Feature, 0xFF20, 0, 0x06, &valid, presetPrep,
+		                   reinterpret_cast<PCHAR>(r5.data()), (ULONG)r5.size());
+		if (!valid)
+			break;
+		std::vector<uint8_t> nameBuf(256, 0);
+		HidP_GetUsageValueArray(HidP_Feature, 0xFF20, 0, 0x08, reinterpret_cast<PCHAR>(nameBuf.data()),
+		                        (USHORT)nameBuf.size(), presetPrep,
+		                        reinterpret_cast<PCHAR>(r5.data()), (ULONG)r5.size());
+		const wchar_t *wp = reinterpret_cast<const wchar_t *>(nameBuf.data());
+		size_t nlen = 0;
+		while (nlen < 128 && wp[nlen])
+			++nlen;
+		presets.push_back({(uint32_t)i, std::wstring(wp, nlen)});
+	}
+	Log::Info(L"  Presets enumerated for %s: %zu", name.c_str(), presets.size());
+	return 0;
+}
+
+int DisplayDevice::getActivePreset(int *outIdx) {
+	if (hPreset == INVALID_HANDLE_VALUE || !presetPrep)
+		return -1;
+	std::vector<uint8_t> r3(presetReportLen, 0);
+	r3[0] = 0x03;
+	if (!HidD_GetFeature(hPreset, r3.data(), (ULONG)r3.size()))
+		return -2;
+	ULONG v = 0;
+	if (HidP_GetUsageValue(HidP_Feature, 0xFF20, 0, 0x03, &v, presetPrep,
+	                       reinterpret_cast<PCHAR>(r3.data()), (ULONG)r3.size()) != HIDP_STATUS_SUCCESS)
+		return -3;
+	activePresetIndex = (int)v;
+	if (outIdx)
+		*outIdx = (int)v;
+	return 0;
+}
+
+int DisplayDevice::setActivePreset(int idx) {
+	if (hPreset == INVALID_HANDLE_VALUE || !presetPrep)
+		return -1;
+	std::vector<uint8_t> r3(presetReportLen, 0);
+	r3[0] = 0x03;
+	if (!HidD_GetFeature(hPreset, r3.data(), (ULONG)r3.size()))
+		return -2;
+	if (HidP_SetUsageValue(HidP_Feature, 0xFF20, 0, 0x03, (ULONG)idx, presetPrep,
+	                       reinterpret_cast<PCHAR>(r3.data()), (ULONG)r3.size()) != HIDP_STATUS_SUCCESS)
+		return -3;
+	if (!HidD_SetFeature(hPreset, r3.data(), (ULONG)r3.size()))
+		return -4;
+	activePresetIndex = idx;
+	return 0;
+}
+
 /* ============================================================ */
 std::vector<DisplayDevice> hid_enumerate() {
 	struct Candidate {
@@ -132,6 +238,16 @@ std::vector<DisplayDevice> hid_enumerate() {
 	};
 	std::vector<Candidate> candidates;
 	std::vector<DisplayDevice> result;
+
+	// 0xFF20 color-preset interfaces (same display as brightness, matched later by ContainerId)
+	struct PresetIface {
+		std::wstring         path;
+		GUID                 containerId{};
+		HANDLE               h         = INVALID_HANDLE_VALUE;
+		PHIDP_PREPARSED_DATA prep      = nullptr;
+		USHORT               reportLen = 0;
+	};
+	std::vector<PresetIface> presetIfaces;
 
 	GUID hidGuid;
 	HidD_GetHidGuid(&hidGuid);
@@ -223,6 +339,28 @@ std::vector<DisplayDevice> hid_enumerate() {
 			Log::Info(L"  ValueCap[%u]: Page=0x%04X Usage=0x%04X ReportID=0x%02X BitSize=%u ReportCount=%u LogMin=%ld LogMax=%ld",
 			          vi, vc.UsagePage, u, vc.ReportID, vc.BitSize, vc.ReportCount,
 			          vc.LogicalMin, vc.LogicalMax);
+		}
+
+		// Divert the 0xFF20 vendor (color preset) interface: same display, no brightness cap.
+		// Capture it here before the brightness-cap check would drop it; attach by ContainerId later.
+		bool isPresetIface = false;
+		for (USHORT vi = 0; vi < numFeatVals; ++vi)
+			if (vcaps[vi].UsagePage == 0xFF20) {
+				isPresetIface = true;
+				break;
+			}
+		if (isPresetIface) {
+			PresetIface pf;
+			pf.path        = path;
+			pf.h           = dev.hDev;
+			pf.prep        = dev.prep;
+			pf.reportLen   = caps.FeatureReportByteLength;
+			pf.containerId = queryContainerId(set, &devInfo);
+			dev.hDev = INVALID_HANDLE_VALUE; // transfer ownership; keep dev.close() from freeing them
+			dev.prep = nullptr;
+			Log::Info(L"  FF20 color-preset interface (PID 0x%04X), deferring for ContainerId attach", pid);
+			presetIfaces.push_back(std::move(pf));
+			continue;
 		}
 
 		// Search for brightness: UsagePage 0x0082 (Monitor), Usage 0x0010 (Brightness)
@@ -331,6 +469,34 @@ std::vector<DisplayDevice> hid_enumerate() {
 		Log::Info(L"  Opened: %s [Feature ID=0x%02X]",
 		          c.dev.name.c_str(), c.dev.featCaps.id);
 		result.push_back(std::move(c.dev));
+	}
+
+	// Pass 3: attach each 0xFF20 preset interface to its display by ContainerId
+	static const GUID emptyGuidP = {};
+	for (auto &pf : presetIfaces) {
+		bool attached = false;
+		for (auto &dd : result) {
+			if (memcmp(&dd.containerId, &emptyGuidP, sizeof(GUID)) == 0)
+				continue;
+			if (memcmp(&dd.containerId, &pf.containerId, sizeof(GUID)) != 0)
+				continue;
+			if (dd.hPreset != INVALID_HANDLE_VALUE)
+				continue;
+			dd.hPreset         = pf.h;
+			dd.presetPrep      = pf.prep;
+			dd.presetReportLen = pf.reportLen;
+			pf.h    = INVALID_HANDLE_VALUE;
+			pf.prep = nullptr;
+			Log::Info(L"  Attached FF20 preset interface to %s", dd.name.c_str());
+			attached = true;
+			break;
+		}
+		if (!attached) {
+			if (pf.prep)
+				HidD_FreePreparsedData(pf.prep);
+			if (pf.h != INVALID_HANDLE_VALUE)
+				CloseHandle(pf.h);
+		}
 	}
 
 	if (!result.empty())

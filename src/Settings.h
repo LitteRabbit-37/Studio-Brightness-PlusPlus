@@ -31,6 +31,9 @@ struct AppSettings {
     HotkeySpec hkUp{0, 0};
     HotkeySpec hkDown{0, 0};
 
+    // Updates: 0 = stable only, 1 = include beta (pre-release) versions
+    int updateChannel{0};
+
     // Methods
     void Load();
     void Save();

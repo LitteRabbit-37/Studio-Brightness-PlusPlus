@@ -40,6 +40,8 @@
 - **Display detection** showing connected Apple display(s) in the tray menu
 - **Log viewer** with real-time diagnostics accessible from the tray menu
 - **Generic Apple display support** for unknown Apple displays with valid HID brightness caps
+- **Color presets** to switch the display's Apple Reference Mode (color profile) from the Options dialog
+- **Automatic updates** from GitHub with selectable stable and beta channels, installed in one click
 - Runs in the system tray, lightweight and easy to use
 
 ### Supported displays
@@ -57,7 +59,7 @@
 Compared to the original [studio-brightness](https://github.com/sfjohnson/studio-brightness), this fork adds:
 
 - **Multi-display support** to detect and control all connected Apple displays together (linked brightness).
-- **Automatic brightness (ALS)** via `ISensorEvents` async callbacks with deadband/hysteresis. Toggle from the tray menu.
+- **Automatic brightness (ALS)** via `ISensorEvents` async callbacks, with an Apple-style relative-lux hysteresis and an asymmetric perceptual ramp. Toggle from the tray menu.
 - **ALS sensor correlation** matching sensors to displays via ContainerId for accurate per-display ambient light readings.
 - **Native brightness key support** (Fn+F1/F2 / sun keys, or your QMK/VIA keys).
 - **Custom global shortcuts** via an Options dialog. Includes a "Reset to Defaults" button.
@@ -72,6 +74,9 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 - **Settings persistence** with all options saved to Windows Registry and restored on restart.
 - **Run at Windows startup** as an optional auto-launch setting.
 - **Robust device detection** with profile-based matching, ContainerId correlation, and automatic reconnection.
+- **Color presets** to read and switch the display's Apple Reference Modes (color profiles), discovered per display and remembered.
+- **MSI installer** with an optional desktop shortcut and a launch-on-finish option, plus a clean uninstall that removes settings.
+- **In-app auto-update** that checks GitHub Releases directly, with stable and beta channels and one-click install.
 
 ### Credits
 
@@ -86,6 +91,14 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 - **Apple Studio Display** or **Apple Pro Display XDR** connected via **USB-C/Thunderbolt** (not HDMI/DisplayPort-to-USB-C adapters)
 - (Sometimes required) Administrator rights for HID access
 
+## Installation
+
+1. Download the latest `studio-brightness-plusplus-x.y.z.msi` from the [Releases](https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus/releases) page.
+2. Run it. The installer asks for the usual Windows permission once, adds a Start Menu entry, lets you add an optional desktop shortcut, and can launch the app right away from its last page.
+3. The app lives in the system tray. Enable "Run at Windows startup" from Options if you want it to start with Windows.
+
+To remove it, use Windows Settings, Apps, "Installed apps", which also clears your settings. A portable `studio-brightness-plusplus.exe` is attached to every release as well, if you would rather not install.
+
 ## Usage
 
 - **Increase brightness:** Use your keyboard's native brightness up key (sun/F2) or a custom shortcut (if enabled in Options).
@@ -95,12 +108,14 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 - **Options...:** Right-click the tray icon > "Options...". You can:
   - Toggle automatic brightness
   - Toggle the On-Screen Display (OSD)
+  - Choose a color preset (Apple Reference Mode) for the active display
   - Enable "Run at Windows startup"
   - Enable custom shortcuts and set Increase/Decrease keys
   - Set the number of brightness steps (10-50)
   - Click "Reset to Defaults" to restore default settings
   - All settings are automatically saved to the Windows Registry
 - **Logs...:** Right-click the tray icon > "Logs..." to open the real-time log viewer. Useful for diagnostics and troubleshooting.
+- **Updates:** The app checks for a new version on launch and once a day. When one is available you get a notification and an "Install update" item appears in the tray menu; one click downloads it, installs it, and relaunches. Right-click the tray icon and use "Update channel" to pick "Stable only" or "Include betas", or "Check update" to check right away.
 - **Quit:** Right-click the tray icon and select "Quit".
 
 ## Building
@@ -119,7 +134,19 @@ Compared to the original [studio-brightness](https://github.com/sfjohnson/studio
 build.bat
 ```
 
-The output will be `bin\studio-brightness-plusplus.exe`.
+The output will be `bin\studio-brightness-plusplus.exe`. The build also generates `include/version.h` from the current git tag (or a `-dev` version when building locally), so the version is never hardcoded.
+
+### Building the installer
+
+The MSI is built with [WiX 5](https://wixtoolset.org/):
+
+```bash
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.UI.wixext/5.0.2
+tools\build-msi.ps1
+```
+
+The output is `bin\studio-brightness-plusplus-x.y.z.msi`. Releases are produced automatically by GitHub Actions when a `v*` tag is pushed; a tag with a `-beta` suffix publishes a pre-release.
 
 ## Technical notes
 
@@ -127,7 +154,7 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 - **Multi-display:** All detected displays share linked brightness. The worker thread manages device lifecycle with automatic reconnection.
 - **ALS:** Uses `ISensorEvents` async callbacks (no polling) for ambient light data. Sensors are correlated to displays via `DEVPKEY_Device_ContainerId`.
 - Brightness step changes default to **10 steps** across the detected range (configurable 10-50).
-- ALS auto-adjust uses a deadband of `max(3% of range, 1500 units)` and smooths toward the target in small increments (2%/step, minimum 500 units).
+- ALS auto-adjust follows an Apple-style response: it reacts only to ambient changes above a relative threshold (20%), then ramps to the new target over a fixed asymmetric duration (about 1.5s to brighten, 5s to dim), stepping in perceptual (log2) space.
 - Brightness key events are captured via HID RawInput (Consumer Control page). Custom global hotkeys use `RegisterHotKey`.
 - **OSD** is rendered via GDI+ as a layered (per-pixel alpha) window -- no focus theft, passes clicks through.
 - **Settings persistence:** All options stored in `HKEY_CURRENT_USER\Software\StudioBrightnessPlusPlus`. Run-at-startup uses `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
@@ -137,7 +164,7 @@ The output will be `bin\studio-brightness-plusplus.exe`.
 
 - If no ambient light sensor is present or accessible, only manual brightness control is available.
 - Only tested with the Apple Studio Display and Apple Pro Display XDR. Other Apple monitors may work via generic fallback.
-- The application does **not** adjust color temperature or other display parameters.
+- Color control is limited to switching between the display's built-in Apple Reference Mode presets. The app does not set an arbitrary color temperature or white point, and does not yet support True Tone, HDR toggling, or screen rotation.
 
 ---
 

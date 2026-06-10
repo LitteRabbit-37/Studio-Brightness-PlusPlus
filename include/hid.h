@@ -35,6 +35,12 @@ struct HidCaps {
 	UCHAR  id    = 0;
 };
 
+/* ---------- Color preset (Apple Reference Mode) ---------- */
+struct ColorPreset {
+	uint32_t     index;   // hardware index written to 0xFF20/0x03 to select
+	std::wstring name;    // UTF-16 name read from 0xFF20/0x08
+};
+
 struct DisplayDevice {
 	HANDLE               hDev  = INVALID_HANDLE_VALUE;
 	PHIDP_PREPARSED_DATA prep  = nullptr;
@@ -44,6 +50,14 @@ struct DisplayDevice {
 	std::wstring         devicePath;
 	GUID                 containerId = {};
 
+	// Color preset (0xFF20) interface: same physical display, different HID interface
+	HANDLE                   hPreset           = INVALID_HANDLE_VALUE;
+	PHIDP_PREPARSED_DATA     presetPrep        = nullptr;
+	USHORT                   presetReportLen   = 0;
+	long                     presetCursorMax   = 0;
+	std::vector<ColorPreset> presets;
+	int                      activePresetIndex = -1;
+
 	// Per-device brightness state
 	ULONG currentBrightness = 30000;
 	ULONG baseBrightness    = 30000;
@@ -52,6 +66,13 @@ struct DisplayDevice {
 
 	// Per-device ALS state
 	float baseLux = 100.f;
+
+	// Auto-brightness ramp/hysteresis (Apple-style)
+	float  lastTargetLux  = 0.f;
+	ULONG  rampStart      = 0;
+	ULONG  rampGoal       = 0;
+	double rampStartMs    = 0.0;
+	double rampDurationMs = 0.0;
 
 	// Nit calibration for proportional brightness matching
 	float maxNits = 600.f;
@@ -65,12 +86,19 @@ struct DisplayDevice {
 	DisplayDevice(DisplayDevice &&o) noexcept
 	    : hDev(o.hDev), prep(o.prep), featCaps(o.featCaps),
 	      type(o.type), name(std::move(o.name)), devicePath(std::move(o.devicePath)),
-	      containerId(o.containerId), currentBrightness(o.currentBrightness),
-	      baseBrightness(o.baseBrightness),
+	      containerId(o.containerId),
+	      hPreset(o.hPreset), presetPrep(o.presetPrep), presetReportLen(o.presetReportLen),
+	      presetCursorMax(o.presetCursorMax), presets(std::move(o.presets)),
+	      activePresetIndex(o.activePresetIndex),
+	      currentBrightness(o.currentBrightness), baseBrightness(o.baseBrightness),
 	      minBrightness(o.minBrightness), maxBrightness(o.maxBrightness), baseLux(o.baseLux),
+	      lastTargetLux(o.lastTargetLux), rampStart(o.rampStart), rampGoal(o.rampGoal),
+	      rampStartMs(o.rampStartMs), rampDurationMs(o.rampDurationMs),
 	      maxNits(o.maxNits) {
 		o.hDev = INVALID_HANDLE_VALUE;
 		o.prep = nullptr;
+		o.hPreset = INVALID_HANDLE_VALUE;
+		o.presetPrep = nullptr;
 	}
 	DisplayDevice &operator=(DisplayDevice &&o) noexcept {
 		if (this != &o) {
@@ -79,11 +107,18 @@ struct DisplayDevice {
 			featCaps = o.featCaps;
 			type = o.type; name = std::move(o.name); devicePath = std::move(o.devicePath);
 			containerId = o.containerId;
+			hPreset = o.hPreset; presetPrep = o.presetPrep;
+			presetReportLen = o.presetReportLen; presetCursorMax = o.presetCursorMax;
+			presets = std::move(o.presets); activePresetIndex = o.activePresetIndex;
 			currentBrightness = o.currentBrightness; baseBrightness = o.baseBrightness;
 			minBrightness = o.minBrightness; maxBrightness = o.maxBrightness;
 			baseLux = o.baseLux; maxNits = o.maxNits;
+			lastTargetLux = o.lastTargetLux; rampStart = o.rampStart; rampGoal = o.rampGoal;
+			rampStartMs = o.rampStartMs; rampDurationMs = o.rampDurationMs;
 			o.hDev = INVALID_HANDLE_VALUE;
 			o.prep = nullptr;
+			o.hPreset = INVALID_HANDLE_VALUE;
+			o.presetPrep = nullptr;
 		}
 		return *this;
 	}
@@ -93,6 +128,12 @@ struct DisplayDevice {
 	int   setBrightness(ULONG val);
 	int   getBrightnessRange(ULONG *mn, ULONG *mx);
 	bool  isOpen() const { return hDev != INVALID_HANDLE_VALUE; }
+
+	// Color presets (0xFF20 interface)
+	bool  hasPresets() const { return hPreset != INVALID_HANDLE_VALUE && !presets.empty(); }
+	int   enumeratePresets();
+	int   getActivePreset(int *outIdx);
+	int   setActivePreset(int idx);
 };
 
 /* ---------- Enumeration ---------- */

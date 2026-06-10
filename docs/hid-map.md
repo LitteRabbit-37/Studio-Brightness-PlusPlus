@@ -9,7 +9,7 @@ All displays use Apple VID `0x05AC`. Data collected from real hardware.
 |-----------|-----------|-------|----------|
 | MI_05 | — | — | No Feature value caps |
 | MI_06&col01 | 0xFF16 | 0x0003, 0x0004 | Apple vendor specific (ReportID 0x01, 8-bit) |
-| MI_06&col02 | 0xFF20 | 0x0002 to 0x000E | Apple vendor specific (12 caps) |
+| MI_06&col02 | 0xFF20 | 0x0002 to 0x000E | Color presets / Apple Reference Modes (12 caps) |
 | MI_06&col03 | 0xFF28 | 0x0001 to 0x0003 | Apple vendor specific (3 caps) |
 | MI_06&col04 | — | — | No Feature value caps |
 | MI_07 | **0x0082** | **0x0010** | **Brightness control** (32-bit, range 400-60000, ReportID 0x01) |
@@ -27,7 +27,7 @@ All displays use Apple VID `0x05AC`. Data collected from real hardware.
 |-----------|-----------|-------|----------|
 | MI_05 | — | — | No Feature value caps |
 | MI_06&col01 | 0xFF16 | 0x0003, 0x0004 | Apple vendor specific (ReportID 0x01, 8-bit) |
-| MI_06&col02 | 0xFF20 | 0x0002 to 0x0012 | Apple vendor specific (12 caps) |
+| MI_06&col02 | 0xFF20 | 0x0002 to 0x0012 | Color presets / Apple Reference Modes (12 caps) |
 | MI_06&col03 | 0xFF28 | 0x0001 to 0x0009 | Apple vendor specific (7 caps) |
 | MI_06&col04 | — | — | No Feature value caps |
 | MI_07&col01 | **0x0082** | **0x0010** | **Brightness control** (32-bit, range 400-60000, ReportID 0x01) |
@@ -81,7 +81,10 @@ that causes `hidclass.sys` to reject the device. This is a firmware issue on App
 The Apple descriptor uses non-standard fields that `sensorshidclassdriver.inf` cannot parse.
 
 **Vendor-specific pages (0xFF16, 0xFF20, 0xFF28)** are present on all models under MI_06.
-Their purpose is unknown (likely firmware updates, color profiles, True Tone calibration).
+**0xFF20 is the color preset (Apple Reference Mode) interface**, now decoded and used by the app:
+usage 0x03 is the active preset index (read/write), 0x04 the enumeration cursor, 0x06 a valid flag,
+0x08 the preset name (UTF-16), and 0x09 the description. 0xFF16 and 0xFF28 remain undecoded
+(likely firmware update and color/calibration surfaces).
 
 ## NTSTATUS reference
 

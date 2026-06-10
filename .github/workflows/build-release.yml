@@ -13,15 +13,34 @@ jobs:
               uses: actions/checkout@v4
               with:
                   persist-credentials: true
+                  fetch-depth: 0
+
+            # The tag is the single source of truth for the version. Strip the leading "v"
+            # (e.g. v2.2.0 -> 2.2.0, v2.2.0-beta.1 -> 2.2.0-beta.1) and hand it to the build,
+            # which generates include/version.h from it (tools/gen-version.ps1).
+            - name: Derive version from tag
+              shell: bash
+              run: echo "SBPP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
             - uses: ilammy/msvc-dev-cmd@v1
-            - name: Build
+            - name: Build exe
               shell: cmd
               run: build.bat
+
+            # WiX 5 (the last release before the Open Source Maintenance Fee gate, so no EULA prompt).
+            - name: Build MSI
+              shell: pwsh
+              run: |
+                  dotnet tool install --global wix --version 5.0.2
+                  ./tools/build-msi.ps1
 
             - name: Create release
               uses: softprops/action-gh-release@v2
               with:
-                  files: bin/studio-brightness-plusplus.exe
+                  files: |
+                      bin/studio-brightness-plusplus-*.msi
+                      bin/studio-brightness-plusplus.exe
+                  # A tag containing a hyphen (v2.2.0-beta.1) is a pre-release; v2.2.0 is stable.
+                  prerelease: ${{ contains(github.ref_name, '-') }}
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

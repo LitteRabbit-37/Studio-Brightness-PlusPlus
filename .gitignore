@@ -36,3 +36,6 @@
 
 obj/
 bin/
+
+# Generated at build time from the git tag (tools/gen-version.ps1)
+include/version.h
