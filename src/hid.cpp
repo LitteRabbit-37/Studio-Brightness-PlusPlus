@@ -163,11 +163,13 @@ int DisplayDevice::enumeratePresets() {
 	presetCursorMax = lm;
 	long bound = (lm > 0 && lm <= 128) ? lm : 64;
 	for (long i = 0; i < bound; ++i) {
-		// Write the enumeration cursor (0xFF20/0x04). NON-destructive: active preset (0x03) is untouched.
+		// Write the enumeration cursor (0xFF20/0x04). This usage is write-only: build a clean, zeroed
+		// report and write it directly, with NO read-modify-write. Boot Camp does the same
+		// (sub_140007EC0). The XDR (PID 0x1116) stalls a GET_REPORT on the cursor report, so a prior
+		// HidD_GetFeature aborts enumeration there (the Gen 1 tolerated the read). NON-destructive:
+		// the active preset (0x03) is untouched.
 		std::vector<uint8_t> wr(presetReportLen, 0);
 		wr[0] = 0x04;
-		if (!HidD_GetFeature(hPreset, wr.data(), (ULONG)wr.size()))
-			break;
 		if (HidP_SetUsageValue(HidP_Feature, 0xFF20, 0, 0x04, (ULONG)i, presetPrep,
 		                       reinterpret_cast<PCHAR>(wr.data()), (ULONG)wr.size()) != HIDP_STATUS_SUCCESS)
 			break;
@@ -217,10 +219,10 @@ int DisplayDevice::getActivePreset(int *outIdx) {
 int DisplayDevice::setActivePreset(int idx) {
 	if (hPreset == INVALID_HANDLE_VALUE || !presetPrep)
 		return -1;
+	// Clean zeroed write-only report, matching Boot Camp's sub_140007EC0 (no read-modify-write,
+	// which the XDR's preset reports reject).
 	std::vector<uint8_t> r3(presetReportLen, 0);
 	r3[0] = 0x03;
-	if (!HidD_GetFeature(hPreset, r3.data(), (ULONG)r3.size()))
-		return -2;
 	if (HidP_SetUsageValue(HidP_Feature, 0xFF20, 0, 0x03, (ULONG)idx, presetPrep,
 	                       reinterpret_cast<PCHAR>(r3.data()), (ULONG)r3.size()) != HIDP_STATUS_SUCCESS)
 		return -3;
