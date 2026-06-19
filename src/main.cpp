@@ -59,8 +59,10 @@ static std::atomic<bool> g_updateChecking{false};
 static std::mutex        g_updateMutex;
 static UpdateInfo        g_updateInfo;
 
-/* ---------- system tray icon GUID ---------- */
-DEFINE_GUID(GUID_PrinterIcon, 0x9d0b8b92, 0x4e1c, 0x488e, 0xa1, 0xe1, 0x23, 0x31, 0xaf, 0xce, 0x2c, 0xb5);
+/* ---------- system tray icon ---------- */
+// Re-add the tray icon when the shell (re)creates the taskbar: Explorer restart, or we
+// started before the taskbar was ready at boot. Registered in WinMain, handled in WndProc.
+static UINT g_wmTaskbarCreated = 0;
 
 /* ---------- multi-display state ---------- */
 static std::vector<DisplayDevice> g_displays;
@@ -140,8 +142,7 @@ BOOL AddNotificationIcon(HWND h) {
 	NOTIFYICONDATA nid{sizeof(nid)};
 	nid.hWnd             = h;
 	nid.uID              = 1;
-	nid.uFlags           = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_GUID;
-	nid.guidItem         = GUID_PrinterIcon;
+	nid.uFlags           = NIF_ICON | NIF_TIP | NIF_MESSAGE;
 	nid.uCallbackMessage = WMAPP_NOTIFYCALLBACK;
 	nid.hIcon            = LoadIcon(g_hInst, MAKEINTRESOURCE(IDI_MYICON));
 	wcscpy_s(nid.szTip, L"Studio Brightness ++");
@@ -151,16 +152,17 @@ BOOL AddNotificationIcon(HWND h) {
 }
 BOOL DeleteNotificationIcon() {
 	NOTIFYICONDATA nid{sizeof(nid)};
-	nid.uFlags   = NIF_GUID;
-	nid.guidItem = GUID_PrinterIcon;
+	nid.hWnd = g_hMain;
+	nid.uID  = 1;
 	return Shell_NotifyIcon(NIM_DELETE, &nid);
 }
 
 /* ---------- update helpers ---------- */
 static void ShowUpdateBalloon(const wchar_t *title, const wchar_t *text) {
 	NOTIFYICONDATA nid{sizeof(nid)};
-	nid.uFlags      = NIF_INFO | NIF_GUID;
-	nid.guidItem    = GUID_PrinterIcon;
+	nid.hWnd        = g_hMain;
+	nid.uID         = 1;
+	nid.uFlags      = NIF_INFO;
 	nid.dwInfoFlags = NIIF_INFO;
 	wcscpy_s(nid.szInfoTitle, title);
 	wcscpy_s(nid.szInfo, text);
@@ -686,6 +688,10 @@ static std::wstring buildDisplayStatusLine() {
 
 /* ---------- hidden window & WndProc ---------- */
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
+	if (g_wmTaskbarCreated && m == g_wmTaskbarCreated) {
+		AddNotificationIcon(h);
+		return 0;
+	}
 	if (m == WM_HOTKEY) {
 		if (wParam == ID_HOTKEY_UP) {
 			adjustBrightnessByStep(+1);
@@ -1073,6 +1079,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	HWND h  = CreateWindowW(kWndClass, L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
 	                        400, 200, nullptr, nullptr, hInst, nullptr);
 	g_hMain = h;
+	g_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 	if (!h) {
 		wchar_t buf[128];
 		wsprintf(buf, L"CreateWindowW failed (%lu)", GetLastError());

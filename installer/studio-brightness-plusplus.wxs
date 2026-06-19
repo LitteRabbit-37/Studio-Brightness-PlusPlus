@@ -12,7 +12,10 @@
            Scope="perMachine"
            Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Studio Brightness++ is already installed." />
+    <!-- AllowSameVersionUpgrades: betas share the numeric ProductVersion (the -beta suffix is
+         dropped), so a same-version reinstall must still remove the prior product and replace the
+         files. Without this, installing beta.2 over beta.1 leaves two registrations and stale files. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Studio Brightness++ is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/LitteRabbit-37/Studio-Brightness-PlusPlus" />
