@@ -8,6 +8,8 @@ HWND TrayPopup::hWnd = nullptr;
 int TrayPopup::m_currentPercent = 50;
 TrayPopup::OnChangeCallback TrayPopup::m_callback = nullptr;
 bool TrayPopup::m_isDragging = false;
+bool TrayPopup::m_disabled = false;
+std::wstring TrayPopup::m_note;
 
 static const wchar_t* kTrayPopupClass = L"StudioBrightnessTrayPopup";
 static const int kPopupWidth = 200;
@@ -36,12 +38,14 @@ void TrayPopup::Create() {
     // hWnd may be nullptr if creation fails; Show() will retry on next call.
 }
 
-void TrayPopup::Show(HWND, int currentPercent, OnChangeCallback cb) {
+void TrayPopup::Show(HWND, int currentPercent, OnChangeCallback cb, bool disabled, const wchar_t* note) {
     if (!hWnd) Create();
-    
+
     m_currentPercent = std::clamp(currentPercent, 0, 100);
     m_callback = cb;
     m_isDragging = false;
+    m_disabled = disabled;
+    m_note = (disabled && note) ? note : L"";
     
     POINT pt;
     GetCursorPos(&pt);
@@ -115,7 +119,21 @@ void TrayPopup::Draw() {
     // Border
     Pen borderPen(Color(100, 255, 255, 255), 1.0f);
     g.DrawRectangle(&borderPen, 0, 0, kPopupWidth - 1, kPopupHeight - 1);
-    
+
+    // Disabled (HDR) mode: show a note instead of an interactive slider.
+    if (m_disabled) {
+        FontFamily ff(L"Segoe UI");
+        Font font(&ff, 8.5f, FontStyleRegular, UnitPoint);
+        SolidBrush textBrush(Color(255, 185, 185, 185));
+        StringFormat fmt;
+        fmt.SetAlignment(StringAlignmentCenter);
+        fmt.SetLineAlignment(StringAlignmentCenter);
+        RectF rect(6.0f, 2.0f, (REAL)(kPopupWidth - 12), (REAL)(kPopupHeight - 4));
+        g.DrawString(m_note.c_str(), -1, &font, rect, &fmt, &textBrush);
+        EndPaint(hWnd, &ps);
+        return;
+    }
+
     int padding = 16;
     int trackH = 4;
     int trackY = (kPopupHeight - trackH) / 2;
@@ -148,12 +166,14 @@ LRESULT CALLBACK TrayPopup::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         Draw();
         return 0;
     case WM_LBUTTONDOWN:
-        m_isDragging = true;
-        SetCapture(h);
-        UpdateFromMouse(LOWORD(l));
+        if (!m_disabled) {
+            m_isDragging = true;
+            SetCapture(h);
+            UpdateFromMouse(LOWORD(l));
+        }
         return 0;
     case WM_MOUSEMOVE:
-        if (m_isDragging) {
+        if (!m_disabled && m_isDragging) {
             POINTS pts = MAKEPOINTS(l);
             UpdateFromMouse(pts.x);
         }

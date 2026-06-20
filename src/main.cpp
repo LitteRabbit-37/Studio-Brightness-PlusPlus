@@ -444,6 +444,7 @@ static ULONG mapLuxToBrightness(float lux, const DisplayDevice &dev) {
 
 /* ---------- Central Brightness Setter ---------- */
 static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool showOSD) {
+	if (g_hdrActive.load()) return;   // brightness writes are no-ops under HDR; Windows owns it
 	ULONG safeVal = std::clamp(val, dev.minBrightness, dev.maxBrightness);
 	if (safeVal != dev.currentBrightness) {
 		int rc = dev.setBrightness(safeVal);
@@ -769,6 +770,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	}
 	if (m == WMAPP_NOTIFYCALLBACK) {
 		if (LOWORD(lParam) == WM_LBUTTONUP) {
+			if (g_hdrActive.load()) {
+				TrayPopup::Show(h, 0, nullptr, true, L"Brightness controlled by Windows (HDR)");
+				return 0;
+			}
 			int   pct    = 50;
 			ULONG refMin = 1000;
 			ULONG refMax = 60000;
