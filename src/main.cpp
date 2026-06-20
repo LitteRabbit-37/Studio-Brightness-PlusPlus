@@ -1137,6 +1137,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		g_settings.SetStartup(g_settings.runAtStartup);
 	}
 
+	Log::ResumeIfPending();   // resume a file-log session that was still running before a restart
 	Log::Info(L"Studio Brightness++ v%s starting", kAppVersion);
 
 	if (!RegisterHiddenClass()) {

@@ -3,10 +3,13 @@
 #include "resource.h"
 #include <vector>
 #include <string>
+#include <shellapi.h>
 
 HWND     LogWindow::hWnd_     = nullptr;
 HWND     LogWindow::hEdit_    = nullptr;
 HWND     LogWindow::hBtnCopy_ = nullptr;
+HWND     LogWindow::hBtnRecord_ = nullptr;
+HWND     LogWindow::hBtnFolder_ = nullptr;
 HFONT    LogWindow::hFont_    = nullptr;
 UINT_PTR LogWindow::timerId_  = 0;
 size_t   LogWindow::nextIndex_ = 0;
@@ -20,6 +23,8 @@ static constexpr int   kPad        = 6;
 static constexpr UINT_PTR kTimerRefresh = 100;
 static constexpr UINT  kRefreshMs      = 200;
 static constexpr int   kBtnCopyId      = 5001;
+static constexpr int   kBtnRecordId    = 5002;
+static constexpr int   kBtnFolderId    = 5003;
 
 void LogWindow::Create() {
 	HINSTANCE hInst = GetModuleHandle(nullptr);
@@ -46,6 +51,12 @@ void LogWindow::Create() {
 	                            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
 	                            kPad, kPad, kBtnW, kBtnH,
 	                            hWnd_, (HMENU)(INT_PTR)kBtnCopyId, hInst, nullptr);
+	int xRec = kPad + kBtnW + kPad;
+	hBtnRecord_ = CreateWindowExW(0, L"BUTTON", L"Record to file", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+	                              xRec, kPad, 190, kBtnH, hWnd_, (HMENU)(INT_PTR)kBtnRecordId, hInst, nullptr);
+	hBtnFolder_ = CreateWindowExW(0, L"BUTTON", L"Open logs folder", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+	                              xRec + 190 + kPad, kPad, 150, kBtnH, hWnd_, (HMENU)(INT_PTR)kBtnFolderId, hInst, nullptr);
+	UpdateRecordButton();
 
 	// Read-only multiline edit
 	int editTop = kPad + kBtnH + kPad;
@@ -139,11 +150,32 @@ void LogWindow::Refresh() {
 	SendMessage(hEdit_, EM_SCROLLCARET, 0, 0);
 }
 
+void LogWindow::UpdateRecordButton() {
+	if (!hBtnRecord_)
+		return;
+	static std::wstring last;
+	std::wstring text;
+	if (Log::FileLogActive()) {
+		int mins = (Log::RemainingSeconds() + 59) / 60;
+		wchar_t buf[64];
+		_snwprintf_s(buf, _TRUNCATE, L"Stop recording (%d min left)", mins);
+		text = buf;
+	} else {
+		text = L"Record to file";
+	}
+	if (text != last) {
+		SetWindowTextW(hBtnRecord_, text.c_str());
+		last = text;
+	}
+}
+
 LRESULT CALLBACK LogWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 	switch (m) {
 	case WM_TIMER:
-		if (w == kTimerRefresh)
+		if (w == kTimerRefresh) {
 			Refresh();
+			UpdateRecordButton();
+		}
 		return 0;
 
 	case WM_COMMAND:
@@ -160,6 +192,18 @@ LRESULT CALLBACK LogWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 				}
 				CloseClipboard();
 			}
+			return 0;
+		}
+		if (LOWORD(w) == kBtnRecordId) {
+			if (Log::FileLogActive())
+				Log::StopFileLog();
+			else
+				Log::StartFileLog(30);
+			UpdateRecordButton();
+			return 0;
+		}
+		if (LOWORD(w) == kBtnFolderId) {
+			ShellExecuteW(h, L"open", Log::LogsFolderPath().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			return 0;
 		}
 		break;
@@ -185,6 +229,8 @@ LRESULT CALLBACK LogWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 		hWnd_ = nullptr;
 		hEdit_ = nullptr;
 		hBtnCopy_ = nullptr;
+		hBtnRecord_ = nullptr;
+		hBtnFolder_ = nullptr;
 		return 0;
 	}
 	return DefWindowProc(h, m, w, l);
