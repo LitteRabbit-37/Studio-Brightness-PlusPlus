@@ -15,8 +15,9 @@ private:
 	static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 	static void UpdateLabel();
 
-	static HWND hWnd;
-	static HWND m_label;
-	static int  m_remaining;
+	static HWND  hWnd;
+	static HWND  m_label;
+	static HFONT m_font;
+	static int   m_remaining;
 	static std::function<void()> m_onRevert;
 };
