@@ -574,6 +574,29 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
 	case WM_INITDIALOG: {
 		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+		// Under HDR, Windows owns brightness: disable auto-brightness and (below) preset switching,
+		// with a tooltip explaining why. Switching to a non-main preset under HDR blanks some XDR units.
+		bool hdrOn = g_hdrActive.load();
+		if (hdrOn) {
+			EnableWindow(GetDlgItem(d, IDC_AUTO_BRIGHTNESS), FALSE);
+			HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP,
+			                           0, 0, 0, 0, d, nullptr, g_hInst, nullptr);
+			if (tip) {
+				const wchar_t *note = L"Brightness is controlled by Windows while HDR is on";
+				for (int ctrlId : { IDC_AUTO_BRIGHTNESS, IDC_PRESET_COMBO }) {
+					RECT rc; GetWindowRect(GetDlgItem(d, ctrlId), &rc);
+					POINT tl{ rc.left, rc.top }, br{ rc.right, rc.bottom };
+					ScreenToClient(d, &tl); ScreenToClient(d, &br);
+					TTTOOLINFOW ti = { sizeof(ti) };
+					ti.uFlags   = TTF_SUBCLASS;
+					ti.hwnd     = d;
+					ti.uId      = (UINT_PTR)ctrlId;
+					ti.rect     = { tl.x, tl.y, br.x, br.y };
+					ti.lpszText = (LPWSTR)note;
+					SendMessageW(tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+				}
+			}
+		}
 		CheckDlgButton(d, IDC_SHOW_OSD, g_settings.showOSD ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_settings.runAtStartup ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_settings.enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
@@ -600,7 +623,9 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 					have        = true;
 				}
 			}
-			std::wstring label = have ? (L"Display: " + dispName) : L"(no display detected)";
+			std::wstring label = !have ? std::wstring(L"(no display detected)")
+			                   : hdrOn ? std::wstring(L"Disable HDR to change the color preset")
+			                           : (L"Display: " + dispName);
 			SetDlgItemTextW(d, IDC_PRESET_DISPLAY_LABEL, label.c_str());
 			HWND combo = GetDlgItem(d, IDC_PRESET_COMBO);
 			SendMessageW(combo, CB_RESETCONTENT, 0, 0);
@@ -613,7 +638,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 						sel = pos;
 				}
 				SendMessageW(combo, CB_SETCURSEL, sel, 0);
-				EnableWindow(combo, TRUE);
+				EnableWindow(combo, !hdrOn); // HDR: keep disabled (switching a preset under HDR can blank the panel)
 			} else {
 				SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"(no presets)");
 				SendMessageW(combo, CB_SETCURSEL, 0, 0);
@@ -847,8 +872,9 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			}
 
 			AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-			AppendMenuW(hMenu, MF_STRING | (g_settings.autoAdjustEnabled.load() ? MF_CHECKED : 0), IDM_TOGGLE_AUTO,
-			            L"Automatic Brightness");
+			UINT autoFlags = MF_STRING | (g_settings.autoAdjustEnabled.load() ? MF_CHECKED : 0u)
+			                 | (g_hdrActive.load() ? (UINT)(MF_GRAYED | MF_DISABLED) : 0u);
+			AppendMenuW(hMenu, autoFlags, IDM_TOGGLE_AUTO, L"Automatic Brightness");
 			AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
 			AppendMenuW(hMenu, MF_STRING, IDM_SHOW_LOGS, L"Logs...");
 			if (g_updateAvailable.load()) {
