@@ -32,6 +32,7 @@
 #include "LogWindow.h"
 #include "version.h"
 #include "Updater.h"
+#include "HdrMonitor.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
@@ -54,10 +55,14 @@ constexpr wchar_t kAppVersion[] = SBPP_VERSION_STR;
 // Update state, filled by the background update-check thread.
 constexpr UINT     WMAPP_UPDATE_READY = WM_APP + 2;
 constexpr UINT_PTR ID_UPDATE_TIMER    = 0xA001;
+constexpr UINT_PTR ID_HDR_TIMER       = 0xA002;
 static std::atomic<bool> g_updateAvailable{false};
 static std::atomic<bool> g_updateChecking{false};
 static std::mutex        g_updateMutex;
 static UpdateInfo        g_updateInfo;
+
+// HDR state of Apple displays, tracked live. Brightness control is unavailable while HDR is on.
+static std::atomic<bool> g_hdrActive{false};
 
 /* ---------- system tray icon ---------- */
 // Re-add the tray icon when the shell (re)creates the taskbar: Explorer restart, or we
@@ -167,6 +172,14 @@ static void ShowUpdateBalloon(const wchar_t *title, const wchar_t *text) {
 	wcscpy_s(nid.szInfoTitle, title);
 	wcscpy_s(nid.szInfo, text);
 	Shell_NotifyIcon(NIM_MODIFY, &nid);
+}
+
+// Re-read the HDR state of Apple displays into g_hdrActive, logging any transition.
+static void RefreshHdrState() {
+	bool now  = HdrAnyAppleDisplayActive();
+	bool prev = g_hdrActive.exchange(now);
+	if (now != prev)
+		Log::Info(L"HDR %s", now ? L"enabled (brightness is controlled by Windows)" : L"disabled");
 }
 
 static void StartUpdateCheck(bool manual) {
@@ -692,6 +705,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		AddNotificationIcon(h);
 		return 0;
 	}
+	if (m == WM_DISPLAYCHANGE) {
+		RefreshHdrState();
+		return 0;
+	}
 	if (m == WM_HOTKEY) {
 		if (wParam == ID_HOTKEY_UP) {
 			adjustBrightnessByStep(+1);
@@ -744,6 +761,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	}
 	if (m == WM_TIMER && wParam == ID_UPDATE_TIMER) {
 		StartUpdateCheck(false);
+		return 0;
+	}
+	if (m == WM_TIMER && wParam == ID_HDR_TIMER) {
+		RefreshHdrState();
 		return 0;
 	}
 	if (m == WMAPP_NOTIFYCALLBACK) {
@@ -1110,6 +1131,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
 	// Check for updates shortly after launch, then once a day.
 	SetTimer(h, ID_UPDATE_TIMER, 24 * 60 * 60 * 1000, nullptr);
+	SetTimer(h, ID_HDR_TIMER, 2000, nullptr);   // poll HDR; also refreshed on WM_DISPLAYCHANGE
+	RefreshHdrState();
 	StartUpdateCheck(false);
 
 	MSG msg;
