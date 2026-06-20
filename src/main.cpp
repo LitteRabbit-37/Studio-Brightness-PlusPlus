@@ -79,7 +79,7 @@ static std::wstring guidToString(const GUID &g) {
 	StringFromGUID2(g, buf, 64);
 	return buf;
 }
-static bool loadPresetForContainer(const GUID &cid, int *outIdx) {
+[[maybe_unused]] static bool loadPresetForContainer(const GUID &cid, int *outIdx) {
 	HKEY hKey;
 	bool ok = false;
 	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\StudioBrightnessPlusPlus\\Presets", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
@@ -103,8 +103,8 @@ static void savePresetForContainer(const GUID &cid, int idx) {
 }
 
 // Cache of enumerated presets (so we don't re-write the 0xFF20 cursor on every reconnect) and a
-// once-per-run restore guard. Switching a calibrated preset re-enumerates the display's HID
-// descriptor (a disconnect), so re-restoring on each reconnect would loop. Keyed by ContainerId.
+// once-per-run default-reset guard. Switching a calibrated preset re-enumerates the display's HID
+// descriptor (a disconnect), so re-applying on each reconnect would loop. Keyed by ContainerId.
 static std::map<std::wstring, std::vector<ColorPreset>> g_presetCache;
 static std::set<std::wstring>                           g_presetRestored;
 
@@ -996,7 +996,7 @@ void startWorker() {
 						          newDev.name.c_str(), newDev.minBrightness, newDev.maxBrightness,
 						          newDev.currentBrightness);
 
-						// Color presets: enumerate ONCE per physical display (cached), restore ONCE per run.
+						// Color presets: enumerate ONCE per physical display (cached), reset to the default ONCE per run.
 						// Re-enumerating or re-restoring on every reconnect loops, because switching a
 						// calibrated preset re-enumerates the display's HID descriptor (a disconnect).
 						if (newDev.hPreset != INVALID_HANDLE_VALUE) {
@@ -1010,15 +1010,14 @@ void startWorker() {
 									g_presetCache[cidKey] = newDev.presets;
 							}
 							newDev.getActivePreset(&newDev.activePresetIndex);
-							if (g_presetRestored.insert(cidKey).second) { // true only the first time this run
-								int saved = -1;
-								if (loadPresetForContainer(newDev.containerId, &saved) && saved >= 0 && !newDev.presets.empty()) {
-									bool valid = false;
-									for (auto &p : newDev.presets)
-										if ((int)p.index == saved) { valid = true; break; }
-									if (valid && saved != newDev.activePresetIndex && newDev.setActivePreset(saved) == 0)
-										Log::Info(L"Restored preset %d on %s", saved, newDev.name.c_str());
-								}
+							if (g_presetRestored.insert(cidKey).second) { // once per run, per display
+								// Reset to the default reference mode (index 0) at startup if not already
+								// there. No persistence/restore of the user's choice; a preset is changed
+								// only by manual action, and this stops a saved preset from re-blanking
+								// some XDR units on every launch.
+								if (!newDev.presets.empty() && newDev.activePresetIndex != 0 &&
+								    newDev.setActivePreset(0) == 0)
+									Log::Info(L"Reset %s to its default color preset", newDev.name.c_str());
 							}
 						}
 
