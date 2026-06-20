@@ -33,6 +33,7 @@
 #include "version.h"
 #include "Updater.h"
 #include "HdrMonitor.h"
+#include "PresetConfirm.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
@@ -79,6 +80,19 @@ static std::wstring guidToString(const GUID &g) {
 	StringFromGUID2(g, buf, 64);
 	return buf;
 }
+// Revert a display's color preset to a previous index, located by ContainerId so it still works
+// after the HID re-enumeration a preset switch triggers (the DisplayDevice object gets replaced).
+static void RevertPresetByContainer(const GUID &cid, int prevIdx) {
+	if (prevIdx < 0) return;
+	std::lock_guard<std::mutex> lock(g_displayMutex);
+	for (auto &dev : g_displays)
+		if (memcmp(&dev.containerId, &cid, sizeof(GUID)) == 0 && dev.hPreset != INVALID_HANDLE_VALUE) {
+			if (dev.setActivePreset(prevIdx) == 0)
+				Log::Info(L"Color preset reverted to %d on %s", prevIdx, dev.name.c_str());
+			break;
+		}
+}
+
 [[maybe_unused]] static bool loadPresetForContainer(const GUID &cid, int *outIdx) {
 	HKEY hKey;
 	bool ok = false;
@@ -92,7 +106,7 @@ static std::wstring guidToString(const GUID &g) {
 	}
 	return ok;
 }
-static void savePresetForContainer(const GUID &cid, int idx) {
+[[maybe_unused]] static void savePresetForContainer(const GUID &cid, int idx) {
 	HKEY hKey;
 	DWORD disp;
 	if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\StudioBrightnessPlusPlus\\Presets", 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, &disp) == ERROR_SUCCESS) {
@@ -646,28 +660,32 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 			g_settings.Save();
 			g_settings.SetStartup(g_settings.runAtStartup);
 
-			// Apply + persist the chosen color preset for the active display
+			// Apply the chosen color preset to the active display, then prompt to keep or auto-revert.
+			// Not persisted: a preset resets to the default at startup, changed only by hand here.
 			{
 				HWND combo = GetDlgItem(d, IDC_PRESET_COMBO);
 				int  sel   = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
 				if (sel != CB_ERR && IsWindowEnabled(combo)) {
-					int  hwIdx = (int)SendMessageW(combo, CB_GETITEMDATA, sel, 0);
-					GUID cid = {};
-					bool persist = false;
+					int  hwIdx    = (int)SendMessageW(combo, CB_GETITEMDATA, sel, 0);
+					GUID cid      = {};
+					int  prevIdx  = -1;
+					bool switched = false;
 					{
 						std::lock_guard<std::mutex> lock(g_displayMutex);
 						if (!g_displays.empty()) {
 							ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
 							auto &dev = g_displays[idx];
-							if (dev.hPreset != INVALID_HANDLE_VALUE && hwIdx != dev.activePresetIndex &&
-							    dev.setActivePreset(hwIdx) == 0) {
-								cid     = dev.containerId;
-								persist = true;
+							if (dev.hPreset != INVALID_HANDLE_VALUE && hwIdx != dev.activePresetIndex) {
+								prevIdx = dev.activePresetIndex;
+								if (dev.setActivePreset(hwIdx) == 0) {
+									cid      = dev.containerId;
+									switched = true;
+								}
 							}
 						}
 					}
-					if (persist)
-						savePresetForContainer(cid, hwIdx);
+					if (switched)
+						PresetConfirm::Show(g_hInst, 10, [cid, prevIdx]() { RevertPresetByContainer(cid, prevIdx); });
 				}
 			}
 
