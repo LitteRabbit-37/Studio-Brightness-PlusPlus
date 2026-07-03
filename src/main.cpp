@@ -484,6 +484,7 @@ static ULONG mapLuxToBrightness(float lux, const DisplayDevice &dev) {
 /* ---------- Central Brightness Setter ---------- */
 static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool showOSD) {
 	if (g_hdrActive.load()) return;   // brightness writes are no-ops under HDR; Windows owns it
+	if (dev.activePresetLocksBrightness()) return; // reference modes fix brightness (macOS locks it too)
 	ULONG safeVal = std::clamp(val, dev.minBrightness, dev.maxBrightness);
 	if (safeVal != dev.currentBrightness) {
 		int rc = dev.setBrightness(safeVal);
@@ -604,20 +605,23 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		bool hdrOn = g_hdrActive.load();
 		std::wstring dispName;
 		std::vector<ColorPreset> presetsCopy;
-		int  active = -1;
-		bool have   = false;
+		int  active         = -1;
+		bool have           = false;
+		bool lockBrightness = false;
 		{
 			std::lock_guard<std::mutex> lock(g_displayMutex);
 			if (!g_displays.empty()) {
-				ULONG idx   = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
-				dispName    = g_displays[idx].name;
-				presetsCopy = g_displays[idx].presets;
-				active      = g_displays[idx].activePresetIndex;
-				have        = true;
+				ULONG idx      = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+				dispName       = g_displays[idx].name;
+				presetsCopy    = g_displays[idx].presets;
+				active         = g_displays[idx].activePresetIndex;
+				lockBrightness = g_displays[idx].activePresetLocksBrightness();
+				have           = true;
 			}
 		}
-		// Auto-brightness is unavailable while Windows owns brightness (HDR).
-		if (hdrOn)
+		// Auto-brightness is unavailable while Windows owns brightness (HDR) and while a
+		// reference-mode preset fixes it (macOS locks it there too).
+		if (hdrOn || lockBrightness)
 			EnableWindow(GetDlgItem(d, IDC_AUTO_BRIGHTNESS), FALSE);
 		CheckDlgButton(d, IDC_SHOW_OSD, g_settings.showOSD ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_settings.runAtStartup ? BST_CHECKED : BST_UNCHECKED);
@@ -666,7 +670,9 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 
 			// Explanatory tooltips. Rect-based (TTF_SUBCLASS on the dialog) so they work on
 			// disabled controls; an enabled control eats the mouse, so only tooltip disabled ones.
-			const wchar_t *note = hdrOn ? L"Brightness is controlled by Windows while HDR is on" : nullptr;
+			const wchar_t *note = hdrOn          ? L"Brightness is controlled by Windows while HDR is on"
+			                    : lockBrightness ? L"Brightness is fixed by the current color preset"
+			                                     : nullptr;
 			if (note) {
 				HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP,
 				                           0, 0, 0, 0, d, nullptr, g_hInst, nullptr);
@@ -799,6 +805,13 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 /* ---------- helpers for tray menu display list ---------- */
+static bool activeDisplayPresetLocked() {
+	std::lock_guard<std::mutex> lock(g_displayMutex);
+	if (g_displays.empty()) return false;
+	ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+	return g_displays[idx].activePresetLocksBrightness();
+}
+
 static std::wstring buildDisplayStatusLine() {
 	std::lock_guard<std::mutex> lock(g_displayMutex);
 	if (g_displays.empty())
@@ -891,16 +904,22 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			int   pct    = 50;
 			ULONG refMin = 1000;
 			ULONG refMax = 60000;
+			bool  locked = false;
 			{
 				std::lock_guard<std::mutex> lock(g_displayMutex);
 				if (g_displays.empty()) return 0;
 				ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
 				auto &ref = g_displays[idx];
+				locked = ref.activePresetLocksBrightness();
 				int range = ref.maxBrightness - ref.minBrightness;
 				if (range <= 0) range = 1;
 				pct    = (int)((float)(ref.currentBrightness - ref.minBrightness) / (float)range * 100.0f);
 				refMin = ref.minBrightness;
 				refMax = ref.maxBrightness;
+			}
+			if (locked) { // reference-mode preset: brightness is fixed (macOS locks it there too)
+				TrayPopup::Show(h, 0, nullptr, true, L"Brightness fixed by the color preset");
+				return 0;
 			}
 
 			TrayPopup::Show(h, pct, [refMin, refMax](int newPct) {
@@ -944,7 +963,8 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 
 			AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 			UINT autoFlags = MF_STRING | (g_settings.autoAdjustEnabled.load() ? MF_CHECKED : 0u)
-			                 | (g_hdrActive.load() ? (UINT)(MF_GRAYED | MF_DISABLED) : 0u);
+			                 | ((g_hdrActive.load() || activeDisplayPresetLocked())
+			                        ? (UINT)(MF_GRAYED | MF_DISABLED) : 0u);
 			AppendMenuW(hMenu, autoFlags, IDM_TOGGLE_AUTO, L"Automatic Brightness");
 			AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
 			AppendMenuW(hMenu, MF_STRING, IDM_SHOW_LOGS, L"Logs...");
@@ -1151,6 +1171,8 @@ void startWorker() {
 				for (auto &dev : g_displays) {
 					if (dev.maxBrightness <= dev.minBrightness)
 						continue; // brightness locked (e.g. a calibrated color preset); nothing to adjust
+					if (dev.activePresetLocksBrightness())
+						continue; // reference mode active: brightness is fixed (macOS parity)
 					float lux = getAmbientLux(dev); // per-device, ContainerId-matched sensor
 
 					bool retarget = (dev.lastTargetLux <= 0.f) ||
