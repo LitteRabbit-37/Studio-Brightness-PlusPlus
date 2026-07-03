@@ -53,18 +53,14 @@
       </Component>
     </StandardDirectory>
 
-    <!-- Wipe the installing user's settings on uninstall (data wipe).
-         Limitation: a per-machine MSI only reaches the uninstalling user's HKCU hive. -->
-    <Component Id="SettingsCleanup" Directory="INSTALLFOLDER">
-      <RegistryKey Root="HKCU" Key="Software\StudioBrightnessPlusPlus" ForceDeleteOnUninstall="yes">
-        <RegistryValue Name="Installed" Type="integer" Value="1" KeyPath="yes" />
-      </RegistryKey>
-    </Component>
+    <!-- NOTE: no settings wipe here. A MajorUpgrade uninstalls the old product before installing
+         the new one, so a ForceDeleteOnUninstall on HKCU\Software\StudioBrightnessPlusPlus would
+         (and did, issue #19) erase every setting on each update. Settings now survive updates AND
+         uninstall; a settings reset belongs in the app, not the installer. -->
 
     <Feature Id="MainApp" Title="Studio Brightness++" Level="1" AllowAbsent="no">
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="StartMenuShortcut" />
-      <ComponentRef Id="SettingsCleanup" />
     </Feature>
     <Feature Id="DesktopShortcut" Title="Desktop shortcut"
              Description="Add a shortcut on the desktop." Level="1" AllowAbsent="yes">
