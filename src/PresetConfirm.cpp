@@ -1,10 +1,12 @@
 #include "PresetConfirm.h"
+#include "HdrMonitor.h"
 #include <cstdio>
 
 HWND  PresetConfirm::hWnd = nullptr;
 HWND  PresetConfirm::m_label = nullptr;
 HFONT PresetConfirm::m_font = nullptr;
 int   PresetConfirm::m_remaining = 0;
+int   PresetConfirm::m_appleMonitors = 0;
 std::function<void()> PresetConfirm::m_onRevert = nullptr;
 
 static const wchar_t *kClass   = L"StudioBrightnessPresetConfirm";
@@ -34,8 +36,9 @@ void PresetConfirm::Show(HINSTANCE hInst, int seconds, std::function<void()> onR
 	// Cancel a previous prompt without reverting (a new switch supersedes it).
 	Cancel();
 
-	m_onRevert  = std::move(onRevert);
-	m_remaining = seconds;
+	m_onRevert      = std::move(onRevert);
+	m_remaining     = seconds;
+	m_appleMonitors = HdrCountAppleMonitors();
 
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc   = WndProc;
@@ -133,6 +136,14 @@ LRESULT CALLBACK PresetConfirm::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 	switch (m) {
 	case WM_TIMER:
 		if (w == kTimerId) {
+			// If an Apple monitor vanished since the switch, the preset blanked the panel:
+			// revert right away instead of sitting out the countdown on a black screen.
+			if (m_appleMonitors > 0 && HdrCountAppleMonitors() < m_appleMonitors) {
+				auto cb = m_onRevert; m_onRevert = nullptr;
+				DestroyWindow(h);
+				if (cb) cb();
+				return 0;
+			}
 			if (--m_remaining <= 0) {
 				auto cb = m_onRevert; m_onRevert = nullptr;
 				DestroyWindow(h);

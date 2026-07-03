@@ -15,6 +15,10 @@
 // for multi-Apple-display machines.
 bool HdrAnyAppleDisplayActive();
 
+// Number of Apple monitors currently attached to the desktop. Used to notice a display dropping
+// its signal right after a color-preset switch (the count decreases when the output goes away).
+int HdrCountAppleMonitors();
+
 // Ask Windows to turn HDR off on every Apple display target, via DisplayConfigSetDeviceInfo
 // (SET_HDR_STATE on Windows 11 24H2+, the legacy SET_ADVANCED_COLOR_STATE before that).
 // Experimental: Apple displays reject the legacy GET query, so the SET may be refused too.

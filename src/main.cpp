@@ -83,15 +83,33 @@ static std::wstring guidToString(const GUID &g) {
 }
 // Revert a display's color preset to a previous index, located by ContainerId so it still works
 // after the HID re-enumeration a preset switch triggers (the DisplayDevice object gets replaced).
-static void RevertPresetByContainer(const GUID &cid, int prevIdx) {
-	if (prevIdx < 0) return;
+static bool tryRevertPreset(const GUID &cid, int prevIdx) {
 	std::lock_guard<std::mutex> lock(g_displayMutex);
 	for (auto &dev : g_displays)
 		if (memcmp(&dev.containerId, &cid, sizeof(GUID)) == 0 && dev.hPreset != INVALID_HANDLE_VALUE) {
-			if (dev.setActivePreset(prevIdx) == 0)
+			if (dev.setActivePreset(prevIdx) == 0) {
 				Log::Info(L"Color preset reverted to %d on %s", prevIdx, dev.name.c_str());
-			break;
+				return true;
+			}
 		}
+	return false;
+}
+static void RevertPresetByContainer(const GUID &cid, int prevIdx) {
+	if (prevIdx < 0) return;
+	Log::Info(L"Reverting color preset to %d", prevIdx);
+	if (tryRevertPreset(cid, prevIdx))
+		return;
+	// The switch re-enumerates the display's HID interface (a disconnect), so the device may not
+	// be back in g_displays yet, especially on the early display-dropped revert. Keep trying in
+	// the background until the worker has re-added it.
+	std::thread([cid, prevIdx]() {
+		for (int i = 0; i < 40; ++i) { // ~20 s
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			if (tryRevertPreset(cid, prevIdx))
+				return;
+		}
+		Log::Warn(L"Preset revert gave up: the display did not come back within 20 s");
+	}).detach();
 }
 
 [[maybe_unused]] static bool loadPresetForContainer(const GUID &cid, int *outIdx) {

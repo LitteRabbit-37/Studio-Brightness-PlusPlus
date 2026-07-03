@@ -53,6 +53,30 @@ bool HdrAnyAppleDisplayActive() {
 	return hdr;
 }
 
+int HdrCountAppleMonitors() {
+	int count = 0;
+	DISPLAY_DEVICEW adapter{};
+	adapter.cb = sizeof(adapter);
+	for (DWORD a = 0; EnumDisplayDevicesW(nullptr, a, &adapter, 0); ++a) {
+		if (!(adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+			adapter = {};
+			adapter.cb = sizeof(adapter);
+			continue;
+		}
+		DISPLAY_DEVICEW mon{};
+		mon.cb = sizeof(mon);
+		for (DWORD m = 0; EnumDisplayDevicesW(adapter.DeviceName, m, &mon, 0); ++m) {
+			if (StrCmpNIW(mon.DeviceID, L"MONITOR\\APP", 11) == 0)
+				++count;
+			mon = {};
+			mon.cb = sizeof(mon);
+		}
+		adapter = {};
+		adapter.cb = sizeof(adapter);
+	}
+	return count;
+}
+
 int HdrTurnOffForAppleDisplays() {
 	UINT32 numPaths = 0, numModes = 0;
 	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &numPaths, &numModes) != ERROR_SUCCESS || !numPaths)
