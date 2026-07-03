@@ -705,15 +705,29 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 							auto &dev = g_displays[idx];
 							if (dev.hPreset != INVALID_HANDLE_VALUE && hwIdx != dev.activePresetIndex) {
 								prevIdx = dev.activePresetIndex;
+								// Log the intent BEFORE the write (the file log flushes per line):
+								// if this switch takes the GPU driver down, the log still shows
+								// exactly what ran.
+								const ColorPreset *from  = dev.activePreset();
+								const wchar_t     *toName = L"?";
+								for (const auto &p : dev.presets)
+									if ((int)p.index == hwIdx) { toName = p.name.c_str(); break; }
+								Log::Info(L"Switching color preset on %s: %d (%s) -> %d (%s), HDR=%d",
+								          dev.name.c_str(), prevIdx, from ? from->name.c_str() : L"?",
+								          hwIdx, toName, g_hdrActive.load() ? 1 : 0);
 								if (dev.setActivePreset(hwIdx) == 0) {
 									cid      = dev.containerId;
 									switched = true;
+								} else {
+									Log::Warn(L"Preset switch failed on %s", dev.name.c_str());
 								}
 							}
 						}
 					}
-					if (switched)
+					if (switched) {
+						NvapiLogHdrState(L"post preset switch");
 						PresetConfirm::Show(g_hInst, 10, [cid, prevIdx]() { RevertPresetByContainer(cid, prevIdx); });
+					}
 				}
 			}
 
@@ -1061,10 +1075,14 @@ void startWorker() {
 								// Reset to the default reference mode (index 0) at startup if not already
 								// there. No persistence/restore of the user's choice; a preset is changed
 								// only by manual action, and this stops a saved preset from re-blanking
-								// some XDR units on every launch.
-								if (!newDev.presets.empty() && newDev.activePresetIndex != 0 &&
-								    newDev.setActivePreset(0) == 0)
-									Log::Info(L"Reset %s to its default color preset", newDev.name.c_str());
+								// some XDR units on every launch. Log first (the file log flushes per
+								// line) so a write that blanks the panel still shows in the log.
+								if (!newDev.presets.empty() && newDev.activePresetIndex != 0) {
+									Log::Info(L"Startup: resetting %s to its default color preset (was %d)",
+									          newDev.name.c_str(), newDev.activePresetIndex);
+									if (newDev.setActivePreset(0) != 0)
+										Log::Warn(L"Default preset reset failed on %s", newDev.name.c_str());
+								}
 							}
 						}
 
