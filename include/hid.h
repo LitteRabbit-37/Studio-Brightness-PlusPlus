@@ -39,6 +39,17 @@ struct HidCaps {
 struct ColorPreset {
 	uint32_t     index;   // hardware index written to 0xFF20/0x03 to select
 	std::wstring name;    // UTF-16 name read from 0xFF20/0x08
+	std::wstring desc;    // UTF-16 secondary string read from 0xFF20/0x09 (Boot Camp reads it too)
+
+	// The factory "Apple ..." presets are the general-use modes: brightness stays adjustable and,
+	// on the XDR panels, they are the only presets compatible with Windows HDR (anything else can
+	// blank the panel). Everything else is a fixed-calibration reference mode; macOS locks
+	// brightness on those as well. The HID protocol carries no per-preset flag (verified against
+	// Boot Camp, which only reads name and desc), so classify by name.
+	bool isHdrCompatible() const { return name.rfind(L"Apple XDR Display", 0) == 0; }
+	bool allowsBrightness() const {
+		return name.rfind(L"Apple XDR Display", 0) == 0 || name.rfind(L"Apple Display", 0) == 0;
+	}
 };
 
 struct DisplayDevice {
@@ -134,6 +145,13 @@ struct DisplayDevice {
 	int   enumeratePresets();
 	int   getActivePreset(int *outIdx);
 	int   setActivePreset(int idx);
+
+	// Name-based preset classification (see ColorPreset). All of these fail open: when the
+	// naming scheme is unknown, nothing gets locked or filtered.
+	const ColorPreset *activePreset() const;          // nullptr when unknown
+	bool  presetsClassifiable() const;                // any preset matches the known Apple naming
+	bool  activePresetLocksBrightness() const;        // macOS parity: reference modes fix brightness
+	int   firstHdrCompatiblePreset() const;           // rescue target when HDR turns on (-1 = none)
 };
 
 /* ---------- Enumeration ---------- */

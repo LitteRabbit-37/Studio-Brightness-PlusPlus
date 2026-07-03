@@ -133,7 +133,8 @@ int DisplayDevice::getBrightnessRange(ULONG *mn, ULONG *mx) {
 }
 
 /* ---------- Color presets (0xFF20 vendor interface) ---------- */
-static bool presetHasFeatureUsage(PHIDP_PREPARSED_DATA prep, USAGE page, USAGE usage, long *logMax) {
+static bool presetHasFeatureUsage(PHIDP_PREPARSED_DATA prep, USAGE page, USAGE usage, long *logMax,
+                                  UCHAR *reportId = nullptr) {
 	HIDP_CAPS caps{};
 	if (HidP_GetCaps(prep, &caps) != HIDP_STATUS_SUCCESS)
 		return false;
@@ -148,6 +149,8 @@ static bool presetHasFeatureUsage(PHIDP_PREPARSED_DATA prep, USAGE page, USAGE u
 		if (c.UsagePage == page && u == usage) {
 			if (logMax)
 				*logMax = c.LogicalMax;
+			if (reportId)
+				*reportId = c.ReportID;
 			return true;
 		}
 	}
@@ -162,6 +165,11 @@ int DisplayDevice::enumeratePresets() {
 	presetHasFeatureUsage(presetPrep, 0xFF20, 0x04, &lm);
 	presetCursorMax = lm;
 	long bound = (lm > 0 && lm <= 128) ? lm : 64;
+	// The desc string (0xFF20/0x09) may live on a different report than the name; resolve its
+	// report id from the caps, the same way Boot Camp resolves report ids (sub_1400076C0).
+	UCHAR descRid = 0;
+	bool  hasDesc = presetHasFeatureUsage(presetPrep, 0xFF20, 0x09, nullptr, &descRid);
+	std::vector<ULONG> flag05s; // per-preset 0xFF20/0x05 values, for the enumeration log only
 	for (long i = 0; i < bound; ++i) {
 		// Write the enumeration cursor (0xFF20/0x04). This usage is write-only: build a clean, zeroed
 		// report and write it directly, with NO read-modify-write. Boot Camp does the same
@@ -185,6 +193,12 @@ int DisplayDevice::enumeratePresets() {
 		                   reinterpret_cast<PCHAR>(r5.data()), (ULONG)r5.size());
 		if (!valid)
 			break;
+		// Per-preset boolean at 0xFF20/0x05 (LogicalMax=1, same report). Meaning unknown; Boot
+		// Camp never reads it. Logged below so tester logs can reveal what it encodes per model
+		// (candidate: a brightness-adjustable or factory-mode flag).
+		ULONG flag05 = 0;
+		HidP_GetUsageValue(HidP_Feature, 0xFF20, 0, 0x05, &flag05, presetPrep,
+		                   reinterpret_cast<PCHAR>(r5.data()), (ULONG)r5.size());
 		std::vector<uint8_t> nameBuf(256, 0);
 		HidP_GetUsageValueArray(HidP_Feature, 0xFF20, 0, 0x08, reinterpret_cast<PCHAR>(nameBuf.data()),
 		                        (USHORT)nameBuf.size(), presetPrep,
@@ -193,10 +207,74 @@ int DisplayDevice::enumeratePresets() {
 		size_t nlen = 0;
 		while (nlen < 128 && wp[nlen])
 			++nlen;
-		presets.push_back({(uint32_t)i, std::wstring(wp, nlen)});
+		// Secondary description string (0xFF20/0x09). Boot Camp reads it alongside the name; we
+		// log it below so tester logs reveal whatever per-preset metadata Apple puts there.
+		std::wstring desc;
+		if (hasDesc) {
+			const std::vector<uint8_t> *rep = &r5;
+			std::vector<uint8_t> rd;
+			if (descRid != r5[0]) {
+				rd.assign(presetReportLen, 0);
+				rd[0] = descRid;
+				rep = HidD_GetFeature(hPreset, rd.data(), (ULONG)rd.size()) ? &rd : nullptr;
+			}
+			if (rep) {
+				std::vector<uint8_t> descBuf(1040, 0);
+				if (HidP_GetUsageValueArray(HidP_Feature, 0xFF20, 0, 0x09,
+				                            reinterpret_cast<PCHAR>(descBuf.data()), (USHORT)descBuf.size(),
+				                            presetPrep,
+				                            reinterpret_cast<PCHAR>(const_cast<uint8_t *>(rep->data())),
+				                            (ULONG)rep->size()) == HIDP_STATUS_SUCCESS) {
+					const wchar_t *dp = reinterpret_cast<const wchar_t *>(descBuf.data());
+					size_t dlen = 0;
+					while (dlen < 512 && dp[dlen])
+						++dlen;
+					desc.assign(dp, dlen);
+				}
+			}
+		}
+		presets.push_back({(uint32_t)i, std::wstring(wp, nlen), std::move(desc)});
+		flag05s.push_back(flag05);
 	}
 	Log::Info(L"  Presets enumerated for %s: %zu", name.c_str(), presets.size());
+	for (size_t k = 0; k < presets.size(); ++k) {
+		const auto &p = presets[k];
+		if (p.desc.empty())
+			Log::Info(L"    preset %u (u05=%lu): %s", p.index, flag05s[k], p.name.c_str());
+		else
+			Log::Info(L"    preset %u (u05=%lu): %s | %s", p.index, flag05s[k], p.name.c_str(), p.desc.c_str());
+	}
 	return 0;
+}
+
+const ColorPreset *DisplayDevice::activePreset() const {
+	if (activePresetIndex < 0)
+		return nullptr;
+	for (const auto &p : presets)
+		if ((int)p.index == activePresetIndex)
+			return &p;
+	return nullptr;
+}
+
+bool DisplayDevice::presetsClassifiable() const {
+	for (const auto &p : presets)
+		if (p.allowsBrightness())
+			return true;
+	return false;
+}
+
+bool DisplayDevice::activePresetLocksBrightness() const {
+	if (!presetsClassifiable())
+		return false; // unknown naming scheme: never lock controls on a guess
+	const ColorPreset *p = activePreset();
+	return p && !p->allowsBrightness();
+}
+
+int DisplayDevice::firstHdrCompatiblePreset() const {
+	for (const auto &p : presets)
+		if (p.isHdrCompatible())
+			return (int)p.index;
+	return presets.empty() ? -1 : 0; // fallback: the factory default is the safest known state
 }
 
 int DisplayDevice::getActivePreset(int *outIdx) {
