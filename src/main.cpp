@@ -33,6 +33,7 @@
 #include "version.h"
 #include "Updater.h"
 #include "HdrMonitor.h"
+#include "NvHdr.h"
 #include "PresetConfirm.h"
 
 #pragma comment(lib, "hid.lib")
@@ -192,8 +193,10 @@ static void ShowUpdateBalloon(const wchar_t *title, const wchar_t *text) {
 static void RefreshHdrState() {
 	bool now  = HdrAnyAppleDisplayActive();
 	bool prev = g_hdrActive.exchange(now);
-	if (now != prev)
+	if (now != prev) {
 		Log::Info(L"HDR %s", now ? L"enabled (brightness is controlled by Windows)" : L"disabled");
+		NvapiLogHdrState(now ? L"HDR on" : L"HDR off");
+	}
 }
 
 static void StartUpdateCheck(bool manual) {
@@ -1182,6 +1185,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	SetTimer(h, ID_UPDATE_TIMER, 24 * 60 * 60 * 1000, nullptr);
 	SetTimer(h, ID_HDR_TIMER, 2000, nullptr);   // poll HDR; also refreshed on WM_DISPLAYCHANGE
 	RefreshHdrState();
+	NvapiLogHdrState(L"startup");
 	StartUpdateCheck(false);
 
 	MSG msg;

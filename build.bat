@@ -58,12 +58,15 @@ if errorlevel 1 exit /b 1
 cl %CXXFLAGS% -c -Foobj/PresetConfirm.obj src/PresetConfirm.cpp
 if errorlevel 1 exit /b 1
 
+cl %CXXFLAGS% -c -Foobj/NvHdr.obj src/NvHdr.cpp
+if errorlevel 1 exit /b 1
+
 :: Compile resources
 rc -Iinclude -foobj/studio-brightness-plusplus.res studio-brightness-plusplus.rc
 if errorlevel 1 exit /b 1
 
 :: Link everything
-cl -Fe./bin/studio-brightness-plusplus.exe obj/main.obj obj/hid.obj obj/Settings.obj obj/OSDWindow.obj obj/TrayPopup.obj obj/Log.obj obj/LogWindow.obj obj/Updater.obj obj/HdrMonitor.obj obj/PresetConfirm.obj obj/studio-brightness-plusplus.res ^
+cl -Fe./bin/studio-brightness-plusplus.exe obj/main.obj obj/hid.obj obj/Settings.obj obj/OSDWindow.obj obj/TrayPopup.obj obj/Log.obj obj/LogWindow.obj obj/Updater.obj obj/HdrMonitor.obj obj/PresetConfirm.obj obj/NvHdr.obj obj/studio-brightness-plusplus.res ^
     -link /MANIFEST:EMBED /MANIFESTINPUT:studio-brightness-plusplus.manifest ^
     hid.lib setupapi.lib shlwapi.lib wbemuuid.lib comctl32.lib User32.lib Shell32.lib Gdi32.lib ^
     sensorsapi.lib ole32.lib Advapi32.lib gdiplus.lib PortableDeviceGuids.lib ^
