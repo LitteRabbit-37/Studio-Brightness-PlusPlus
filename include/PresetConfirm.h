@@ -11,6 +11,10 @@ class PresetConfirm {
 public:
 	static void Show(HINSTANCE hInst, int seconds, std::function<void()> onRevert);
 
+	// Dismiss a pending prompt WITHOUT reverting (something else took over, e.g. the HDR
+	// auto-rescue switched the preset out from under it). No-op when no prompt is open.
+	static void Cancel();
+
 private:
 	static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 	static void UpdateLabel();

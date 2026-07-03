@@ -190,12 +190,34 @@ static void ShowUpdateBalloon(const wchar_t *title, const wchar_t *text) {
 }
 
 // Re-read the HDR state of Apple displays into g_hdrActive, logging any transition.
+// On the SDR-to-HDR transition, auto-rescue: a reference-mode preset is incompatible with HDR
+// (the panel can blank), so force each display back to a main "Apple XDR Display" preset the
+// moment HDR turns on. This closes the "pick a reference mode, then enable HDR" trap, and it is
+// the same recovery a user would do by hand from a second machine.
 static void RefreshHdrState() {
 	bool now  = HdrAnyAppleDisplayActive();
 	bool prev = g_hdrActive.exchange(now);
 	if (now != prev) {
 		Log::Info(L"HDR %s", now ? L"enabled (brightness is controlled by Windows)" : L"disabled");
 		NvapiLogHdrState(now ? L"HDR on" : L"HDR off");
+		if (now) {
+			PresetConfirm::Cancel(); // a pending keep/revert prompt is superseded by the rescue
+			std::lock_guard<std::mutex> lock(g_displayMutex);
+			for (auto &dev : g_displays) {
+				if (!dev.hasPresets() || !dev.presetsClassifiable())
+					continue;
+				const ColorPreset *ap = dev.activePreset();
+				if (!ap || ap->isHdrCompatible())
+					continue;
+				int tgt = dev.firstHdrCompatiblePreset();
+				if (tgt >= 0 && tgt != dev.activePresetIndex) {
+					Log::Info(L"HDR enabled with \"%s\" active on %s: switching to preset %d for HDR compatibility",
+					          ap->name.c_str(), dev.name.c_str(), tgt);
+					if (dev.setActivePreset(tgt) != 0)
+						Log::Warn(L"HDR rescue preset switch failed on %s", dev.name.c_str());
+				}
+			}
+		}
 	}
 }
 
@@ -577,29 +599,26 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
 	case WM_INITDIALOG: {
 		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
-		// Under HDR, Windows owns brightness: disable auto-brightness and (below) preset switching,
-		// with a tooltip explaining why. Switching to a non-main preset under HDR blanks some XDR units.
+		// Snapshot the active display's preset state once; the combo fill, the control
+		// disabling and the tooltips below all key off it.
 		bool hdrOn = g_hdrActive.load();
-		if (hdrOn) {
-			EnableWindow(GetDlgItem(d, IDC_AUTO_BRIGHTNESS), FALSE);
-			HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP,
-			                           0, 0, 0, 0, d, nullptr, g_hInst, nullptr);
-			if (tip) {
-				const wchar_t *note = L"Brightness is controlled by Windows while HDR is on";
-				for (int ctrlId : { IDC_AUTO_BRIGHTNESS, IDC_PRESET_COMBO }) {
-					RECT rc; GetWindowRect(GetDlgItem(d, ctrlId), &rc);
-					POINT tl{ rc.left, rc.top }, br{ rc.right, rc.bottom };
-					ScreenToClient(d, &tl); ScreenToClient(d, &br);
-					TTTOOLINFOW ti = { sizeof(ti) };
-					ti.uFlags   = TTF_SUBCLASS;
-					ti.hwnd     = d;
-					ti.uId      = (UINT_PTR)ctrlId;
-					ti.rect     = { tl.x, tl.y, br.x, br.y };
-					ti.lpszText = (LPWSTR)note;
-					SendMessageW(tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-				}
+		std::wstring dispName;
+		std::vector<ColorPreset> presetsCopy;
+		int  active = -1;
+		bool have   = false;
+		{
+			std::lock_guard<std::mutex> lock(g_displayMutex);
+			if (!g_displays.empty()) {
+				ULONG idx   = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+				dispName    = g_displays[idx].name;
+				presetsCopy = g_displays[idx].presets;
+				active      = g_displays[idx].activePresetIndex;
+				have        = true;
 			}
 		}
+		// Auto-brightness is unavailable while Windows owns brightness (HDR).
+		if (hdrOn)
+			EnableWindow(GetDlgItem(d, IDC_AUTO_BRIGHTNESS), FALSE);
 		CheckDlgButton(d, IDC_SHOW_OSD, g_settings.showOSD ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_RUN_AT_STARTUP, g_settings.runAtStartup ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_ENABLE_HOTKEYS, g_settings.enableCustomHotkeys ? BST_CHECKED : BST_UNCHECKED);
@@ -610,42 +629,64 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_SETRANGE32, kMinBrightnessSteps, kMaxBrightnessSteps);
 		SendDlgItemMessageW(d, IDC_BRIGHTNESS_STEPS_SPIN, UDM_SETPOS32, 0, g_settings.brightnessSteps);
 
-		// Color preset combo for the active display
+		// Color preset combo for the active display. Under HDR only the main "Apple XDR Display"
+		// presets stay listed (the only ones compatible with HDR): switching between those is
+		// valid, anything else can blank the panel.
 		{
-			std::wstring dispName;
-			std::vector<ColorPreset> presetsCopy;
-			int  active = -1;
-			bool have   = false;
-			{
-				std::lock_guard<std::mutex> lock(g_displayMutex);
-				if (!g_displays.empty()) {
-					ULONG idx   = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
-					dispName    = g_displays[idx].name;
-					presetsCopy = g_displays[idx].presets;
-					active      = g_displays[idx].activePresetIndex;
-					have        = true;
-				}
-			}
+			std::vector<ColorPreset> shown;
+			for (const auto &p : presetsCopy)
+				if (!hdrOn || p.isHdrCompatible())
+					shown.push_back(p);
 			std::wstring label = !have ? std::wstring(L"(no display detected)")
-			                   : hdrOn ? std::wstring(L"Disable HDR to change the color preset")
+			                   : hdrOn ? std::wstring(shown.empty()
+			                                 ? L"Disable HDR to change the color preset"
+			                                 : L"HDR is on: only the Apple XDR presets are available")
 			                           : (L"Display: " + dispName);
 			SetDlgItemTextW(d, IDC_PRESET_DISPLAY_LABEL, label.c_str());
 			HWND combo = GetDlgItem(d, IDC_PRESET_COMBO);
 			SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-			if (have && !presetsCopy.empty()) {
-				int sel = 0;
-				for (size_t i = 0; i < presetsCopy.size(); ++i) {
-					int pos = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)presetsCopy[i].name.c_str());
-					SendMessageW(combo, CB_SETITEMDATA, pos, (LPARAM)presetsCopy[i].index);
-					if ((int)presetsCopy[i].index == active)
+			if (have && !shown.empty()) {
+				int sel = -1;
+				for (size_t i = 0; i < shown.size(); ++i) {
+					int pos = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)shown[i].name.c_str());
+					SendMessageW(combo, CB_SETITEMDATA, pos, (LPARAM)shown[i].index);
+					if ((int)shown[i].index == active)
 						sel = pos;
 				}
-				SendMessageW(combo, CB_SETCURSEL, sel, 0);
-				EnableWindow(combo, !hdrOn); // HDR: keep disabled (switching a preset under HDR can blank the panel)
+				SendMessageW(combo, CB_SETCURSEL, sel, 0); // -1 = no selection (active preset filtered out)
+				EnableWindow(combo, TRUE);
 			} else {
 				SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"(no presets)");
 				SendMessageW(combo, CB_SETCURSEL, 0, 0);
 				EnableWindow(combo, FALSE);
+			}
+
+			// Experimental escape hatch: ask Windows to turn HDR off from here (it may refuse).
+			ShowWindow(GetDlgItem(d, IDC_HDR_OFF_BTN), hdrOn ? SW_SHOW : SW_HIDE);
+
+			// Explanatory tooltips. Rect-based (TTF_SUBCLASS on the dialog) so they work on
+			// disabled controls; an enabled control eats the mouse, so only tooltip disabled ones.
+			const wchar_t *note = hdrOn ? L"Brightness is controlled by Windows while HDR is on" : nullptr;
+			if (note) {
+				HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP,
+				                           0, 0, 0, 0, d, nullptr, g_hInst, nullptr);
+				if (tip) {
+					std::vector<int> targets{ IDC_AUTO_BRIGHTNESS };
+					if (!IsWindowEnabled(combo))
+						targets.push_back(IDC_PRESET_COMBO);
+					for (int ctrlId : targets) {
+						RECT rc; GetWindowRect(GetDlgItem(d, ctrlId), &rc);
+						POINT tl{ rc.left, rc.top }, br{ rc.right, rc.bottom };
+						ScreenToClient(d, &tl); ScreenToClient(d, &br);
+						TTTOOLINFOW ti = { sizeof(ti) };
+						ti.uFlags   = TTF_SUBCLASS;
+						ti.hwnd     = d;
+						ti.uId      = (UINT_PTR)ctrlId;
+						ti.rect     = { tl.x, tl.y, br.x, br.y };
+						ti.lpszText = (LPWSTR)note;
+						SendMessageW(tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+					}
+				}
 			}
 		}
 		return TRUE;
@@ -657,6 +698,19 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 			BOOL en = IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED;
 			EnableWindow(GetDlgItem(d, IDC_HOTKEY_UP), en);
 			EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), en);
+			return TRUE;
+		}
+		if (id == IDC_HDR_OFF_BTN && code == BN_CLICKED) {
+			Log::Info(L"User asked to turn HDR off from Options");
+			if (HdrTurnOffForAppleDisplays() > 0) {
+				SetDlgItemTextW(d, IDC_PRESET_DISPLAY_LABEL,
+				                L"HDR is turning off. Reopen Options to change the color preset.");
+				EnableWindow(GetDlgItem(d, IDC_HDR_OFF_BTN), FALSE);
+			} else {
+				MessageBoxW(d,
+				            L"Windows did not accept the change. Please turn HDR off in Windows Settings > System > Display.",
+				            L"Studio Brightness++", MB_ICONINFORMATION);
+			}
 			return TRUE;
 		}
 		if (id == IDC_RESET_SHORTCUTS && code == BN_CLICKED) {

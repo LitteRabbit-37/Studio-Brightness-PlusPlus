@@ -33,6 +33,7 @@
 // Color preset (Options Dialog)
 #define IDC_PRESET_DISPLAY_LABEL  1401
 #define IDC_PRESET_COMBO          1402
+#define IDC_HDR_OFF_BTN           1403
 
 // Hotkey IDs
 #define ID_HOTKEY_UP   4001

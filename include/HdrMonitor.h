@@ -14,3 +14,9 @@
 // case for the XDR testers). A per-display variant keyed on ContainerId can be layered on later
 // for multi-Apple-display machines.
 bool HdrAnyAppleDisplayActive();
+
+// Ask Windows to turn HDR off on every Apple display target, via DisplayConfigSetDeviceInfo
+// (SET_HDR_STATE on Windows 11 24H2+, the legacy SET_ADVANCED_COLOR_STATE before that).
+// Experimental: Apple displays reject the legacy GET query, so the SET may be refused too.
+// Returns the number of targets Windows accepted the change for (0 = none), logging each attempt.
+int HdrTurnOffForAppleDisplays();

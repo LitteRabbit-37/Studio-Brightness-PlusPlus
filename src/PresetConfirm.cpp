@@ -32,7 +32,7 @@ void PresetConfirm::UpdateLabel() {
 
 void PresetConfirm::Show(HINSTANCE hInst, int seconds, std::function<void()> onRevert) {
 	// Cancel a previous prompt without reverting (a new switch supersedes it).
-	if (hWnd) { m_onRevert = nullptr; DestroyWindow(hWnd); hWnd = nullptr; }
+	Cancel();
 
 	m_onRevert  = std::move(onRevert);
 	m_remaining = seconds;
@@ -119,6 +119,14 @@ void PresetConfirm::Show(HINSTANCE hInst, int seconds, std::function<void()> onR
 	SetForegroundWindow(hWnd);
 	SetFocus(keep);
 	SetTimer(hWnd, kTimerId, 1000, nullptr);
+}
+
+void PresetConfirm::Cancel() {
+	if (hWnd) {
+		m_onRevert = nullptr;
+		DestroyWindow(hWnd);
+		hWnd = nullptr;
+	}
 }
 
 LRESULT CALLBACK PresetConfirm::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
