@@ -46,9 +46,9 @@ struct ColorPreset {
 	// blank the panel). Everything else is a fixed-calibration reference mode; macOS locks
 	// brightness on those as well. The HID protocol carries no per-preset flag (verified against
 	// Boot Camp, which only reads name and desc), so classify by name.
-	bool isHdrCompatible() const { return name.rfind(L"Apple XDR Display", 0) == 0; }
+	bool isHdrCompatible() const { return name.rfind(L"Apple XDR Display", 0) == 0 || name.rfind(L"Pro Display XDR", 0) == 0; }
 	bool allowsBrightness() const {
-		return name.rfind(L"Apple XDR Display", 0) == 0 || name.rfind(L"Apple Display", 0) == 0;
+		return name.rfind(L"Apple XDR Display", 0) == 0 || name.rfind(L"Pro Display XDR", 0) == 0 || name.rfind(L"Apple Display", 0) == 0;
 	}
 };
 
