@@ -10,6 +10,7 @@
 #define IDM_INSTALL_UPDATE   131
 #define IDM_CHANNEL_STABLE   132
 #define IDM_CHANNEL_BETA     133
+#define IDM_TOGGLE_ROTATE    134
 #define IDM_SELECT_DISPLAY   2000  // 2000 + i for display selection
 #define IDI_MYICON           201
 #define IDI_NOTIFICATIONICON 207
@@ -24,6 +25,7 @@
 #define IDC_ENABLE_HOTKEYS        1002
 #define IDC_RUN_AT_STARTUP        1003
 #define IDC_SHOW_OSD              1004
+#define IDC_AUTO_ROTATE           1005
 #define IDC_HOTKEY_UP             1101
 #define IDC_HOTKEY_DOWN           1102
 #define IDC_RESET_SHORTCUTS       1201
