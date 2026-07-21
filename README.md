@@ -176,9 +176,9 @@ MPL-2.0 License, following the upstream project's terms.
 
 ## Thanks
 
-<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Miguel M.</b> </div>  <div><i>Hey man, I really appreciate what you did here! I wish I had more to give, but I'm really working on getting a better-paying job, and this has really helped in my journey. When I get a better job, I'll support more!</i></div><br>
-<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Someone</b> </div>  <div><i>{"note":"Worked on studio XDR, but only can change brightness when start app after windows reboot and complete login in, think need option install as service and delay start after 1 min. Thank so much","gif":null,"video":null}</i></div><br>
-<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Someone</b> </div>  <div><i>Thank you so much for Studio brightness ++!</i></div><br><!--END_SECTION:buy-me-a-coffe-->
+<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Jon M</b> </div>  <div><i>Thank you for brightening my day!</i></div><br>
+<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Miguel M.</b> </div>  <div><i>Hey man, I really appreciate what you did here! I wish I had more to give, but I'm really working on getting a better-paying job, and this has really helped in my journey. When I get a better job, I'll support more!</i></div><br>
+<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Someone</b> </div>  <div><i>{"note":"Worked on studio XDR, but only can change brightness when start app after windows reboot and complete login in, think need option install as service and delay start after 1 min. Thank so much","gif":null,"video":null}</i></div><br><!--END_SECTION:buy-me-a-coffe-->
 
 Many thanks to Sam Johnson for the original work!
 Feel free to submit issues, pull requests, or feedback.
