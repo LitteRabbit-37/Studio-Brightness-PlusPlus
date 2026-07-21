@@ -25,6 +25,7 @@ void AppSettings::Load() {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         autoAdjustEnabled.store(GetRegDWORD(hKey, L"AutoBrightnessEnabled", 1) != 0);
+        autoRotateEnabled.store(GetRegDWORD(hKey, L"AutoRotateEnabled", 1) != 0);
         showOSD = (GetRegDWORD(hKey, L"ShowOSD", 1) != 0); // Default to True
         runAtStartup = (GetRegDWORD(hKey, L"RunAtStartup", 0) != 0);
         enableCustomHotkeys = (GetRegDWORD(hKey, L"CustomHotkeysEnabled", 0) != 0);
@@ -51,6 +52,7 @@ void AppSettings::Save() {
     DWORD disp;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeyPath, 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, &disp) == ERROR_SUCCESS) {
         SetRegDWORD(hKey, L"AutoBrightnessEnabled", autoAdjustEnabled.load() ? 1 : 0);
+        SetRegDWORD(hKey, L"AutoRotateEnabled", autoRotateEnabled.load() ? 1 : 0);
         SetRegDWORD(hKey, L"ShowOSD", showOSD ? 1 : 0);
         SetRegDWORD(hKey, L"CustomHotkeysEnabled", enableCustomHotkeys ? 1 : 0);
         SetRegDWORD(hKey, L"RunAtStartup", runAtStartup ? 1 : 0);

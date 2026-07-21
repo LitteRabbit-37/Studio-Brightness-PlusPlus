@@ -35,6 +35,7 @@
 #include "HdrMonitor.h"
 #include "NvHdr.h"
 #include "PresetConfirm.h"
+#include "orientation.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
@@ -58,6 +59,7 @@ constexpr wchar_t kAppVersion[] = SBPP_VERSION_STR;
 constexpr UINT     WMAPP_UPDATE_READY = WM_APP + 2;
 constexpr UINT_PTR ID_UPDATE_TIMER    = 0xA001;
 constexpr UINT_PTR ID_HDR_TIMER       = 0xA002;
+constexpr UINT_PTR ID_ORIENT_TIMER    = 0xA003;
 static std::atomic<bool> g_updateAvailable{false};
 static std::atomic<bool> g_updateChecking{false};
 static std::mutex        g_updateMutex;
@@ -618,6 +620,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
 	case WM_INITDIALOG: {
 		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(d, IDC_AUTO_ROTATE, g_settings.autoRotateEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 		// Snapshot the active display's preset state once; the combo fill, the control
 		// disabling and the tooltips below all key off it.
 		bool hdrOn = g_hdrActive.load();
@@ -748,6 +751,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		if (id == IDOK) {
 			g_settings.autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
+			g_settings.autoRotateEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_ROTATE) == BST_CHECKED);
 			g_settings.showOSD            = (IsDlgButtonChecked(d, IDC_SHOW_OSD) == BST_CHECKED);
 			g_settings.runAtStartup        = (IsDlgButtonChecked(d, IDC_RUN_AT_STARTUP) == BST_CHECKED);
 			g_settings.enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
@@ -765,6 +769,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 			g_settings.brightnessSteps = std::clamp(steps, kMinBrightnessSteps, kMaxBrightnessSteps);
 			g_settings.Save();
 			g_settings.SetStartup(g_settings.runAtStartup);
+			orient_set_enabled(g_settings.autoRotateEnabled.load());
 
 			// Apply the chosen color preset to the active display, then prompt to keep or auto-revert.
 			// Not persisted: a preset resets to the default at startup, changed only by hand here.
@@ -913,6 +918,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		RefreshHdrState();
 		return 0;
 	}
+	if (m == WM_TIMER && wParam == ID_ORIENT_TIMER) {
+		orient_watch_tick();
+		return 0;
+	}
 	if (m == WMAPP_NOTIFYCALLBACK) {
 		if (LOWORD(lParam) == WM_LBUTTONUP) {
 			if (g_hdrActive.load()) {
@@ -984,6 +993,8 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			                 | ((g_hdrActive.load() || activeDisplayPresetLocked())
 			                        ? (UINT)(MF_GRAYED | MF_DISABLED) : 0u);
 			AppendMenuW(hMenu, autoFlags, IDM_TOGGLE_AUTO, L"Automatic Brightness");
+			UINT rotFlags = MF_STRING | (g_settings.autoRotateEnabled.load() ? MF_CHECKED : 0u);
+			AppendMenuW(hMenu, rotFlags, IDM_TOGGLE_ROTATE, L"Automatic Rotate");
 			AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
 			AppendMenuW(hMenu, MF_STRING, IDM_SHOW_LOGS, L"Logs...");
 			if (g_updateAvailable.load()) {
@@ -1017,6 +1028,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			if (cmd == IDM_TOGGLE_AUTO) {
 				g_settings.autoAdjustEnabled.store(!g_settings.autoAdjustEnabled.load());
 				g_settings.Save();
+			} else if (cmd == IDM_TOGGLE_ROTATE) {
+				g_settings.autoRotateEnabled.store(!g_settings.autoRotateEnabled.load());
+				g_settings.Save();
+				orient_set_enabled(g_settings.autoRotateEnabled.load());
 			} else if (cmd == IDM_LINKED_MODE) {
 				g_settings.linkedMode = !g_settings.linkedMode;
 				g_settings.Save();
@@ -1296,6 +1311,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	// Check for updates shortly after launch, then once a day.
 	SetTimer(h, ID_UPDATE_TIMER, 24 * 60 * 60 * 1000, nullptr);
 	SetTimer(h, ID_HDR_TIMER, 2000, nullptr);   // poll HDR; also refreshed on WM_DISPLAYCHANGE
+	orient_watch_init();                        // discover Apple orientation sensors (MI_09)
+	orient_set_enabled(g_settings.autoRotateEnabled.load());
+	SetTimer(h, ID_ORIENT_TIMER, 250, nullptr); // poll orientation -> autorotate
 	RefreshHdrState();
 	NvapiLogHdrState(L"startup");
 	StartUpdateCheck(false);
@@ -1306,6 +1324,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		DispatchMessage(&msg);
 	}
 
+	orient_watch_shutdown();
 	GdiplusShutdown(gdiplusToken);
 	CoUninitialize();
 	CloseHandle(hSingleInstance);

@@ -16,6 +16,7 @@ struct HotkeySpec {
 struct AppSettings {
     // Core Brightness Logic
     std::atomic<bool> autoAdjustEnabled{true};
+    std::atomic<bool> autoRotateEnabled{true};
     ULONG             brightnessSteps{10};
 
     // User Interface
