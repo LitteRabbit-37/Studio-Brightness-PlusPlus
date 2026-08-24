@@ -122,7 +122,7 @@ To remove it, use Windows Settings, Apps, "Installed apps", which also clears yo
 
 ### Prerequisites
 
-- Visual Studio 2022 Build Tools (or Community/Professional/Enterprise)
+- Visual Studio 2022 or 2026 Build Tools (or Community/Professional/Enterprise)
 
 ### Using build.bat
 
@@ -130,7 +130,7 @@ To remove it, use Windows Settings, Apps, "Installed apps", which also clears yo
 2. Go to the project directory
 3. Run:
 
-```bash
+```pwsh
 build.bat
 ```
 
@@ -147,6 +147,32 @@ tools\build-msi.ps1
 ```
 
 The output is `bin\studio-brightness-plusplus-x.y.z.msi`. Releases are produced automatically by GitHub Actions when a `v*` tag is pushed; a tag with a `-beta` suffix publishes a pre-release.
+
+### CMake
+
+Another way of building is with CMake, that works with Visual Studio, GCC, Clang, Intel oneAPI, etc.
+
+```pwsh
+cmake -B build
+cmake --build build --config Release
+```
+
+The output will be `build\studio-brightness-plusplus.exe`.
+
+The MSI installer package can also be built with CMake, using WiX - if needed, install WiX.
+
+```pwsh
+winget install WiXToolset.WiXCLI
+wix extension add --global WixToolset.UI.wixext
+```
+
+Generate the MSI using CPack:
+
+```pwsh
+cmake --build build --config Release
+cpack --config build/CPackConfig.cmake
+```
+
 
 ## Technical notes
 
