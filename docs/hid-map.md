@@ -21,12 +21,23 @@ the device orientation sensor.
 
 Ambient light data fields, all Input, all 32 bit:
 
-| Usage | Meaning | Unit exponent on Gen 1 |
+| Usage | Meaning | Unit exponent, same on Gen 1 and XDR |
 |---|---|---|
 | 0x04D1 | Illuminance | 13, meaning 10^-3, so the value is milli lux |
 | 0x04D2 | Correlated colour temperature in Kelvin | 0, so the value is Kelvin directly |
 | 0x04D4 | CIE 1931 chromaticity x | 8, meaning 10^-8 |
 | 0x04D5 | CIE 1931 chromaticity y | 8, meaning 10^-8 |
+
+The two models differ in behaviour, not in format. The XDR reports whole lux, every raw value is a
+multiple of 1000, where the Gen 1 resolves to a thousandth. And in the dark the XDR reads a plain 0
+with the three colour fields at 0 as well, because it does not estimate a colour from a few
+photons, where the Gen 1 still reports 0.17 lux and a colour. An all zero report from the XDR is a
+real reading of darkness, not a sensor fault. Auto brightness has to act on it, and rejecting it
+would leave the app blind in a dark room. The app only treats the colour part as absent.
+
+The colour fields were checked on the XDR by holding a phone showing red, green and blue in front
+of each sensor: x=0.63 y=0.34 for red, x=0.29 y=0.71 for green, x=0.16 y=0.06 for blue, which are
+the three corners of the CIE diagram.
 
 Orientation data fields, all Input, 9 bit, logical range 0 to 360:
 
@@ -92,6 +103,20 @@ report. Present on every model. Boot Camp never touches it. Likely firmware upda
 
 Sits next to brightness on MI_07, 16 bit, range 0 to 20000. Undecoded.
 
+### Page 0xFF15, usage 0x0003, XDR only
+
+On the XDR, MI_07 has a second collection next to the brightness one, top level 0xFF00 / 0x0037.
+It carries one 64 bit Input value on page 0xFF15 usage 0x0003 and one Feature value that reuses the
+sensor usage 0x030E, both declared with the brightness unit code, exponent -2 and the brightness
+range 400 to 60000. The Input report reads `06 D0 07 00 00 58 02 00 00`, which as two 32 bit
+values is 2000 and 600. Those look like the panel's peak and SDR nit figures, the XDR preset is
+named P3-2000 nits and 600 is the Gen 1 figure, but the declared exponent would make them 20 and
+6, so either the firmware ignores the exponent on this field or the guess is wrong. Not present on
+Gen 1. Undecoded, see part 4.
+
+Worth noting in passing: brightness itself, range 400 to 60000 with exponent -2, is 4.00 to 600.00
+nits. The brightness control is in hundredths of a nit.
+
 ## 2. Per model interface map
 
 ### Studio Display, PID 0x1114
@@ -117,9 +142,14 @@ default. Only that first one leaves brightness adjustable. Every calibrated mode
 | MI_05 | Vendor | Starts |
 | MI_06 col01 to col04 | Same vendor pages as Gen 1, with 0xFF20 carrying more presets and 0xFF28 carrying 7 caps instead of 3 | Starts |
 | MI_07 col01 | Brightness on 0x0082 / 0x0010 | Starts |
-| MI_07 col02 | Page 0x0020 usage 0x030E, range 400 to 60000 | Starts. A sensor property on a working interface, contents not yet dumped. See part 4. |
-| MI_08 | Two ambient light sensors, front and rear, as col01 and col02 | **Code 10**, for a different reason than MI_09, see below |
+| MI_07 col02 | 0xFF00 / 0x0037: one 64 bit Input on page 0xFF15 and a Feature reusing 0x030E, brightness units, reads 2000 and 600 | Starts. Not a sensor. See page 0xFF15 above. |
+| MI_08 | Two ambient light sensors, same fields and exponents as Gen 1. col01 is the front one, in the upper left corner of the bezel, report ID 0x01. col02 is the rear one, report ID 0x02. | **Code 10**, for a different reason than MI_09, see below |
 | MI_09 | Orientation sensor | **Code 10** without a null driver |
+
+Under room light the front sensor reads higher than the rear one, 43 against 17 lux in one setup,
+so the brightest of the two, which is what the app uses, is normally the front. Either sensor under
+a phone flashlight reads tens of thousands of lux, far above the 5000 lux the brightness mapping
+clamps to, which is also where Boot Camp clamps.
 
 Sixteen Reference Modes. Only the two named Apple XDR Display leave brightness adjustable, and they
 are the only ones compatible with Windows HDR. Switching to any other preset while HDR is on blanks
@@ -221,11 +251,13 @@ A white point shift can also be approximated host side through the GPU gamma ram
 Night Light does. No driver and no reverse engineering needed, but it breaks under HDR, Windows
 clamps the ramp, and it affects colour managed applications.
 
-**The XDR MI_07 col02 sensor collection.** The app only logs Feature value caps, so nobody has
-looked at the Input or Button caps of the XDR interfaces that start correctly. A page 0x20 property
-on a working interface is probably just an auto brightness timing property. But if an illuminance
-usage were reachable there it would remove the need for the filter driver, so it is worth one probe
-run with the filter uninstalled.
+**Whether the XDR sensors can be reached without the filter driver.** Settled, they cannot. A
+probe of an XDR with no third party driver installed lists MI_05, MI_06 and MI_07 only. MI_08 and
+MI_09 do not exist as HID devices until the descriptor fix and the null driver are installed.
+
+**MI_07 col02 on the XDR.** The 2000 and 600 it reports look like nit figures but the declared
+exponent says otherwise, see page 0xFF15. What a Gen 2 shows there, if anything, and whether the
+values change with the active preset, would settle it.
 
 **0xFF28 and 0xFF16.** Both undecoded on every model. 0xFF28 is the interesting one.
 
