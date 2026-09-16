@@ -24,3 +24,9 @@ int HdrCountAppleMonitors();
 // Experimental: Apple displays reject the legacy GET query, so the SET may be refused too.
 // Returns the number of targets Windows accepted the change for (0 = none), logging each attempt.
 int HdrTurnOffForAppleDisplays();
+
+// Log what Windows believes about each Apple output: DXGI colour space, bit depth and the
+// min, max and full-frame luminance the compositor works with, plus the current SDR white
+// level (the "SDR content brightness" slider, in nits). Diagnostic only, called at startup and
+// on each HDR transition; it is the data issue #21 (brightness headroom under HDR) needs.
+void HdrLogAppleOutputs(const wchar_t *context);

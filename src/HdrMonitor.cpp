@@ -53,6 +53,70 @@ bool HdrAnyAppleDisplayActive() {
 	return hdr;
 }
 
+void HdrLogAppleOutputs(const wchar_t *context) {
+	// What the compositor thinks the panel can do.
+	IDXGIFactory1 *factory = nullptr;
+	if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) && factory) {
+		IDXGIAdapter1 *adapter = nullptr;
+		for (UINT a = 0; factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a) {
+			IDXGIOutput *output = nullptr;
+			for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+				IDXGIOutput6 *output6 = nullptr;
+				if (SUCCEEDED(output->QueryInterface(IID_PPV_ARGS(&output6))) && output6) {
+					DXGI_OUTPUT_DESC1 desc{};
+					if (SUCCEEDED(output6->GetDesc1(&desc)) && isAppleOutput(desc.DeviceName))
+						Log::Info(L"HDR [%s] %s: colorSpace=%d bpc=%u luminance min=%.3f max=%.0f fullFrame=%.0f nits",
+						          context, desc.DeviceName, (int)desc.ColorSpace, desc.BitsPerColor,
+						          desc.MinLuminance, desc.MaxLuminance, desc.MaxFullFrameLuminance);
+					output6->Release();
+				}
+				output->Release();
+				output = nullptr;
+			}
+			adapter->Release();
+			adapter = nullptr;
+		}
+		factory->Release();
+	}
+
+	// The SDR white level: what SDR content is rendered at while HDR is on. Documented GET,
+	// type 11, value is a multiple of 80 nits times 1000. Self-defined packet, same reason as
+	// HdrTurnOffForAppleDisplays: no SDK version gating.
+	UINT32 numPaths = 0, numModes = 0;
+	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &numPaths, &numModes) != ERROR_SUCCESS || !numPaths)
+		return;
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths(numPaths);
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes(numModes ? numModes : 1);
+	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &numPaths, paths.data(), &numModes, modes.data(), nullptr) != ERROR_SUCCESS)
+		return;
+	for (UINT32 i = 0; i < numPaths; ++i) {
+		DISPLAYCONFIG_TARGET_DEVICE_NAME tname{};
+		tname.header.type      = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+		tname.header.size      = sizeof(tname);
+		tname.header.adapterId = paths[i].targetInfo.adapterId;
+		tname.header.id        = paths[i].targetInfo.id;
+		if (DisplayConfigGetDeviceInfo(&tname.header) != ERROR_SUCCESS)
+			continue;
+		if (!StrStrIW(tname.monitorDevicePath, L"#APP"))
+			continue;
+		struct {
+			DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+			ULONG sdrWhiteLevel;
+		} pkt{};
+		pkt.header.type      = (DISPLAYCONFIG_DEVICE_INFO_TYPE)11; // GET_SDR_WHITE_LEVEL
+		pkt.header.size      = sizeof(pkt);
+		pkt.header.adapterId = paths[i].targetInfo.adapterId;
+		pkt.header.id        = paths[i].targetInfo.id;
+		LONG rc = DisplayConfigGetDeviceInfo(&pkt.header);
+		if (rc == ERROR_SUCCESS)
+			Log::Info(L"HDR [%s] %s: SDR white level %lu (%.0f nits)", context,
+			          tname.monitorFriendlyDeviceName, pkt.sdrWhiteLevel, pkt.sdrWhiteLevel * 80.0 / 1000.0);
+		else
+			Log::Info(L"HDR [%s] %s: SDR white level query refused (rc=%ld)", context,
+			          tname.monitorFriendlyDeviceName, rc);
+	}
+}
+
 int HdrCountAppleMonitors() {
 	int count = 0;
 	DISPLAY_DEVICEW adapter{};

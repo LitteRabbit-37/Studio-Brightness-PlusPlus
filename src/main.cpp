@@ -220,6 +220,7 @@ static void RefreshHdrState() {
 	if (now != prev) {
 		Log::Info(L"HDR %s", now ? L"enabled (brightness is controlled by Windows)" : L"disabled");
 		NvapiLogHdrState(now ? L"HDR on" : L"HDR off");
+		HdrLogAppleOutputs(now ? L"HDR on" : L"HDR off");
 		if (now) {
 			PresetConfirm::Cancel(); // a pending keep/revert prompt is superseded by the rescue
 			std::lock_guard<std::mutex> lock(g_displayMutex);
@@ -1366,6 +1367,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	SetTimer(h, ID_HDR_TIMER, 2000, nullptr);   // poll HDR; also refreshed on WM_DISPLAYCHANGE
 	RefreshHdrState();
 	NvapiLogHdrState(L"startup");
+	HdrLogAppleOutputs(L"startup");
 	StartUpdateCheck(false);
 
 	MSG msg;
