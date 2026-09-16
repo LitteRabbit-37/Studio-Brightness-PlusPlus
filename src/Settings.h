@@ -16,6 +16,9 @@ struct HotkeySpec {
 struct AppSettings {
     // Core Brightness Logic
     std::atomic<bool> autoAdjustEnabled{true};
+    // On by default. Safe because the watcher only reacts to a physical change it has
+    // observed; it never rotates the screen at startup on its own.
+    std::atomic<bool> autoRotateEnabled{true};
     ULONG             brightnessSteps{10};
 
     // User Interface

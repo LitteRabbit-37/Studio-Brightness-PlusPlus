@@ -35,6 +35,8 @@
 #include "HdrMonitor.h"
 #include "NvHdr.h"
 #include "PresetConfirm.h"
+#include "orientation.h"
+#include "als.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
@@ -387,13 +389,13 @@ static void initAlsSensors() {
 
 	ComPtr<ISensorCollection> col;
 	if (FAILED(mgr->GetSensorsByType(SENSOR_TYPE_AMBIENT_LIGHT, &col))) {
-		Log::Info(L"ALS: No ambient light sensors found");
+		Log::Info(L"ALS: no ambient light sensor via the Windows Sensor API");
 		return;
 	}
 
 	ULONG count = 0;
 	col->GetCount(&count);
-	Log::Info(L"ALS: Found %lu ambient light sensor(s)", count);
+	Log::Info(L"ALS: %lu ambient light sensor(s) via the Windows Sensor API", count);
 
 	std::lock_guard<std::mutex> lock(g_alsMutex);
 
@@ -467,6 +469,16 @@ static void cleanupAlsSensors() {
 static float getAmbientLux(const DisplayDevice &dev) {
 	std::lock_guard<std::mutex> lock(g_alsMutex);
 
+	// Prefer the raw-HID Apple ALS (the same source Boot Camp uses) matched to this display.
+	{
+		GUID zeroG = {};
+		float lx;
+		if (memcmp(&dev.containerId, &zeroG, sizeof(GUID)) != 0 && als_get_lux(&dev.containerId, &lx)) {
+			g_lastKnownLux.store(lx, std::memory_order_relaxed);
+			return lx;
+		}
+	}
+
 	// Try to find a sensor matching this display's ContainerId
 	GUID zero = {};
 	if (memcmp(&dev.containerId, &zero, sizeof(GUID)) != 0) {
@@ -476,6 +488,15 @@ static float getAmbientLux(const DisplayDevice &dev) {
 				g_lastKnownLux.store(lx, std::memory_order_relaxed);
 				return lx;
 			}
+		}
+	}
+
+	// Raw-HID master (any display's ALS) before the Sensor-API master.
+	{
+		float lx;
+		if (als_get_lux(nullptr, &lx)) {
+			g_lastKnownLux.store(lx, std::memory_order_relaxed);
+			return lx;
 		}
 	}
 
@@ -515,7 +536,7 @@ static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool
 		if (isUserAction) {
 			dev.baseBrightness = safeVal;
 			if (safeVal != dev.minBrightness && safeVal != dev.maxBrightness)
-				dev.baseLux = getAmbientLux(dev);
+				dev.baseLux = std::max(1.f, getAmbientLux(dev));
 			// Stop any auto ramp and drop the hysteresis anchor so auto re-syncs to the user.
 			dev.rampDurationMs = 0.0;
 			dev.lastTargetLux  = 0.f;
@@ -618,6 +639,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
 	case WM_INITDIALOG: {
 		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(d, IDC_AUTO_ROTATE, g_settings.autoRotateEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 		// Snapshot the active display's preset state once; the combo fill, the control
 		// disabling and the tooltips below all key off it.
 		bool hdrOn = g_hdrActive.load();
@@ -748,6 +770,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		if (id == IDOK) {
 			g_settings.autoAdjustEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_BRIGHTNESS) == BST_CHECKED);
+			g_settings.autoRotateEnabled.store(IsDlgButtonChecked(d, IDC_AUTO_ROTATE) == BST_CHECKED);
 			g_settings.showOSD            = (IsDlgButtonChecked(d, IDC_SHOW_OSD) == BST_CHECKED);
 			g_settings.runAtStartup        = (IsDlgButtonChecked(d, IDC_RUN_AT_STARTUP) == BST_CHECKED);
 			g_settings.enableCustomHotkeys = (IsDlgButtonChecked(d, IDC_ENABLE_HOTKEYS) == BST_CHECKED);
@@ -765,6 +788,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 			g_settings.brightnessSteps = std::clamp(steps, kMinBrightnessSteps, kMaxBrightnessSteps);
 			g_settings.Save();
 			g_settings.SetStartup(g_settings.runAtStartup);
+			orient_set_enabled(g_settings.autoRotateEnabled.load());
 
 			// Apply the chosen color preset to the active display, then prompt to keep or auto-revert.
 			// Not persisted: a preset resets to the default at startup, changed only by hand here.
@@ -984,6 +1008,8 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			                 | ((g_hdrActive.load() || activeDisplayPresetLocked())
 			                        ? (UINT)(MF_GRAYED | MF_DISABLED) : 0u);
 			AppendMenuW(hMenu, autoFlags, IDM_TOGGLE_AUTO, L"Automatic Brightness");
+			UINT rotFlags = MF_STRING | (g_settings.autoRotateEnabled.load() ? MF_CHECKED : 0u);
+			AppendMenuW(hMenu, rotFlags, IDM_TOGGLE_ROTATE, L"Automatic Rotate");
 			AppendMenuW(hMenu, MF_STRING, IDM_OPTIONS, L"Options...");
 			AppendMenuW(hMenu, MF_STRING, IDM_SHOW_LOGS, L"Logs...");
 			if (g_updateAvailable.load()) {
@@ -1017,6 +1043,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			if (cmd == IDM_TOGGLE_AUTO) {
 				g_settings.autoAdjustEnabled.store(!g_settings.autoAdjustEnabled.load());
 				g_settings.Save();
+			} else if (cmd == IDM_TOGGLE_ROTATE) {
+				g_settings.autoRotateEnabled.store(!g_settings.autoRotateEnabled.load());
+				g_settings.Save();
+				orient_set_enabled(g_settings.autoRotateEnabled.load());
 			} else if (cmd == IDM_LINKED_MODE) {
 				g_settings.linkedMode = !g_settings.linkedMode;
 				g_settings.Save();
@@ -1073,6 +1103,36 @@ bool RegisterHiddenClass() {
 		return false;
 	}
 	return true;
+}
+
+/* ---------- sensor polling thread ---------- */
+// Both watchers read with synchronous HID I/O: HidD_GetInputReport blocks, and the fallback
+// waits up to 150 ms per device. On a WM_TIMER that stalls the message pump several times a
+// second, and a panel waking from sleep can block a HID call for seconds. Polling goes here
+// instead and publishes into the snapshots the UI and the worker read.
+// Joined at shutdown, unlike the worker: the watchers free the handles it is still reading.
+static std::thread g_sensorThread;
+static HANDLE      g_sensorStop = nullptr;
+
+static void startSensorThread() {
+	g_sensorStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	if (!g_sensorStop) {
+		Log::Warn(L"Sensor thread not started: CreateEvent failed (%lu)", GetLastError());
+		return;
+	}
+	g_sensorThread = std::thread([] {
+		// Wait, not sleep, so shutdown does not cost a whole poll interval.
+		while (WaitForSingleObject(g_sensorStop, 250) == WAIT_TIMEOUT) {
+			orient_watch_tick();
+			als_watch_tick();
+		}
+	});
+}
+
+static void stopSensorThread() {
+	if (g_sensorStop) SetEvent(g_sensorStop);
+	if (g_sensorThread.joinable()) g_sensorThread.join();
+	if (g_sensorStop) { CloseHandle(g_sensorStop); g_sensorStop = nullptr; }
 }
 
 /* ---------- background worker thread ---------- */
@@ -1143,7 +1203,9 @@ void startWorker() {
 						newDev.getBrightnessRange(&newDev.minBrightness, &newDev.maxBrightness);
 						if (newDev.getBrightness(&newDev.currentBrightness) == 0) {
 							newDev.baseBrightness = newDev.currentBrightness;
-							newDev.baseLux = getAmbientLux(newDev);
+							// mapLuxToBrightness divides by baseLux, and a sensor reads 0 in a dark room.
+							// Unclamped that sends the target to infinity.
+							newDev.baseLux = std::max(1.f, getAmbientLux(newDev));
 						}
 						Log::Info(L"Device %s ready [range %lu-%lu, current %lu]",
 						          newDev.name.c_str(), newDev.minBrightness, newDev.maxBrightness,
@@ -1291,6 +1353,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		            L"Studio Brightness ++", MB_ICONWARNING);
 	}
 	registerHotkeys(h);
+
+	// Before startWorker: the worker anchors baseLux from the first reading it can get, so the
+	// raw-HID ALS has to be up and carrying a real sample by then.
+	orient_watch_init(g_settings.autoRotateEnabled.load()); // discover Apple orientation sensors (MI_09)
+	als_watch_init();                           // discover Apple raw-HID ALS (MI_08 illuminance)
+	startSensorThread();                        // poll both off the UI thread
 	startWorker();
 
 	// Check for updates shortly after launch, then once a day.
@@ -1306,6 +1374,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		DispatchMessage(&msg);
 	}
 
+	stopSensorThread();   // join first: the watchers below free the handles it reads
+	orient_watch_shutdown();
+	als_watch_shutdown();
 	GdiplusShutdown(gdiplusToken);
 	CoUninitialize();
 	CloseHandle(hSingleInstance);
