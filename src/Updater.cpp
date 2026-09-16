@@ -91,6 +91,44 @@ SemVer parseSemver(std::wstring v) {
     return s;
 }
 
+static bool allDigits(const std::wstring &s) {
+    if (s.empty()) return false;
+    for (wchar_t c : s) if (c < L'0' || c > L'9') return false;
+    return true;
+}
+
+// Pre-release precedence, SemVer 2.0 rule 11: compare dot-separated identifiers left to right.
+// Two numeric identifiers compare as integers, a numeric one ranks below an alphanumeric one,
+// otherwise lexical; when one list is a prefix of the other, the shorter one is lower.
+// The old plain string compare read "beta.10" as lower than "beta.9", so every client on an
+// earlier beta would have stopped seeing updates at the tenth one.
+static int cmpPrerelease(const std::wstring &a, const std::wstring &b) {
+    size_t ia = 0, ib = 0;
+    for (;;) {
+        const bool moreA = ia <= a.size() && !a.empty();
+        const bool moreB = ib <= b.size() && !b.empty();
+        if (!moreA && !moreB) return 0;
+        if (!moreA) return -1;
+        if (!moreB) return 1;
+        size_t ea = a.find(L'.', ia); if (ea == std::wstring::npos) ea = a.size();
+        size_t eb = b.find(L'.', ib); if (eb == std::wstring::npos) eb = b.size();
+        const std::wstring ta = a.substr(ia, ea - ia), tb = b.substr(ib, eb - ib);
+        const bool na = allDigits(ta), nb = allDigits(tb);
+        int c;
+        if (na && nb) {
+            const long va = wcstol(ta.c_str(), nullptr, 10), vb = wcstol(tb.c_str(), nullptr, 10);
+            c = (va < vb) ? -1 : (va > vb) ? 1 : 0;
+        } else if (na != nb) {
+            c = na ? -1 : 1;
+        } else {
+            const int r = ta.compare(tb);
+            c = (r < 0) ? -1 : (r > 0) ? 1 : 0;
+        }
+        if (c) return c;
+        ia = ea + 1; ib = eb + 1;   // past the end when the last identifier was consumed
+    }
+}
+
 // SemVer precedence: -1 if a<b, 0 if equal, 1 if a>b. A release outranks its pre-releases.
 int cmpSemver(const SemVer &a, const SemVer &b) {
     if (a.major != b.major) return a.major < b.major ? -1 : 1;
@@ -99,8 +137,7 @@ int cmpSemver(const SemVer &a, const SemVer &b) {
     if (a.pre.empty() && b.pre.empty()) return 0;
     if (a.pre.empty()) return 1;   // 2.2.0 > 2.2.0-beta.1
     if (b.pre.empty()) return -1;
-    if (a.pre == b.pre) return 0;
-    return a.pre < b.pre ? -1 : 1; // lexical: beta.1 < beta.2
+    return cmpPrerelease(a.pre, b.pre);
 }
 
 bool endsWithMsi(const std::wstring &name) {
