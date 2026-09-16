@@ -27,6 +27,12 @@ jobs:
               shell: cmd
               run: build.bat
 
+            # The HID probe from tools/hidprobe, so a tester can map a new display model
+            # without a compiler. Read-only, see tools/hidprobe/README.md.
+            - name: Build hid_probe
+              shell: cmd
+              run: cl /nologo /EHsc /std:c++20 /Febin\hid_probe.exe /Foobj\hid_probe.obj tools\hidprobe\hid_probe.cpp
+
             # WiX 5 (the last release before the Open Source Maintenance Fee gate, so no EULA prompt).
             - name: Build MSI
               shell: pwsh
@@ -40,6 +46,7 @@ jobs:
                   files: |
                       bin/studio-brightness-plusplus-*.msi
                       bin/studio-brightness-plusplus.exe
+                      bin/hid_probe.exe
                   # A tag containing a hyphen (v2.2.0-beta.1) is a pre-release; v2.2.0 is stable.
                   prerelease: ${{ contains(github.ref_name, '-') }}
               env:
