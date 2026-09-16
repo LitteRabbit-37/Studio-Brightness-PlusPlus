@@ -113,7 +113,10 @@ bool AlsDevice::readAmbient(LONG *rawOut, AmbientReading *out) {
 	if (okT) out->colorTemp = (float)t * unitScale(eTemp);
 	if (okX) out->chromaX   = (float)cx * unitScale(eChromaX);
 	if (okY) out->chromaY   = (float)cy * unitScale(eChromaY);
-	out->hasColour = okT || (okX && okY);
+	// Below a few photons the panel zeroes the colour fields (the XDR does it at 0 lux). That is
+	// "no colour estimate", not 0 K, so do not hand a temperature that does not exist to the log or
+	// to a True Tone consumer. The illuminance stays a valid reading of darkness.
+	out->hasColour = (okT && t != 0) || (okX && okY && (cx != 0 || cy != 0));
 	return true;
 }
 
