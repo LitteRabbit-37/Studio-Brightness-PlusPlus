@@ -397,6 +397,17 @@ std::vector<DisplayDevice> hid_enumerate() {
 
 		dev.featCaps.len = caps.FeatureReportByteLength;
 
+		// A HID Sensors top level collection is never a brightness control. Once the null
+		// driver turns the ambient light and orientation sensors into plain HID, they land
+		// here, and the fallback below used to match the ALS Report Interval property
+		// (0x0020/0x030E, LogicalMax 10000) and make MI_08 a brightness candidate. Only the
+		// ContainerId dedup kept it from being written to.
+		if (caps.UsagePage == 0x0020) {
+			Log::Info(L"  Sensor collection (page 0x0020), not a brightness interface, skipping");
+			dev.close();
+			continue;
+		}
+
 		// Enumerate all Feature value caps and find the brightness control
 		USHORT numFeatVals = caps.NumberFeatureValueCaps;
 		if (numFeatVals == 0) {
@@ -454,7 +465,9 @@ std::vector<DisplayDevice> hid_enumerate() {
 				brightIdx = vi;
 				break;
 			}
-			if (fallbackIdx < 0 && vc.ReportCount == 1 && vc.LogicalMax >= 400)
+			// Never fall back onto a sensor property: the XDR's MI_07 col02 carries a page 0x20
+			// cap with the brightness range inside a vendor collection.
+			if (fallbackIdx < 0 && vc.UsagePage != 0x0020 && vc.ReportCount == 1 && vc.LogicalMax >= 400)
 				fallbackIdx = vi;
 		}
 		int chosen = (brightIdx >= 0) ? brightIdx : fallbackIdx;
