@@ -195,9 +195,9 @@ MPL-2.0 License, following the upstream project's terms.
 
 ## Thanks
 
-<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Em</b> </div>  <div><i>I used to unplug my laptop and connect my iPad , lower brightness and reconnect throughout the day. Your software fixes this problem perfectly. Thanks for using your talent and skill for this application!</i></div><br>
-<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Jon M</b> </div>  <div><i>Thank you for brightening my day!</i></div><br>
-<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Miguel M.</b> </div>  <div><i>Hey man, I really appreciate what you did here! I wish I had more to give, but I'm really working on getting a better-paying job, and this has really helped in my journey. When I get a better job, I'll support more!</i></div><br><!--END_SECTION:buy-me-a-coffe-->
+<!--START_SECTION:buy-me-a-coffee--><div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>@kronikiwabisabi</b> </div>  <div><i>{"note":"as a Windows\/Android person, I no longer have to rely on my partner to adjust my (or should I say, his - obviously it wasn't me who wanted this monitor :P) screen brightness, thank you for making this :)","gif":null,"video":null}</i></div><br>
+<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Em</b> </div>  <div><i>I used to unplug my laptop and connect my iPad , lower brightness and reconnect throughout the day. Your software fixes this problem perfectly. Thanks for using your talent and skill for this application!</i></div><br>
+<div><img src="https://github.com/akosbalasko/coffee-to-file/blob/main/assets/bmc-logo.png?raw=true" width="30"> from <b>Jon M</b> </div>  <div><i>Thank you for brightening my day!</i></div><br><!--END_SECTION:buy-me-a-coffe-->
 
 Many thanks to Sam Johnson for the original work!
 Feel free to submit issues, pull requests, or feedback.
