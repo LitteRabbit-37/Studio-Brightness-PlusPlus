@@ -1,4 +1,5 @@
 #include "OSDWindow.h"
+#include "Dpi.h"
 #include <gdiplus.h>
 #include <algorithm>
 
@@ -12,9 +13,17 @@ int OSDWindow::m_posX = 0; // set in Show() based on active monitor
 int OSDWindow::m_posY = 0;
 
 static const wchar_t* kOSDClass = L"StudioBrightnessOSD";
+static int s_dpi = 96;  // DPI of the monitor the OSD is shown on
+
+// Layout at 96 DPI, scaled to the monitor the OSD is shown on (see Dpi.h).
 static const int kOSDWidth = 300;
 static const int kOSDHeight = 40;
 static const int kMargin = 40;
+static const int kCornerRadius = 8;
+static const int kBarMargin = 8;
+static const int kBarCorner = 4;
+
+static int S(int v) { return DpiScale(v, s_dpi); }
 static const UINT_PTR kTimerID_Hide = 1;
 static const UINT kHideDelay = 2500; // ms
 
@@ -54,8 +63,9 @@ void OSDWindow::Show(int current, int max) {
     HMONITOR hMon = MonitorFromPoint(cursorPt, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(mi) };
     if (GetMonitorInfo(hMon, &mi)) {
-        m_posX = mi.rcMonitor.left + kMargin;
-        m_posY = mi.rcMonitor.top  + kMargin;
+        s_dpi = DpiOfMonitor(hMon);
+        m_posX = mi.rcMonitor.left + S(kMargin);
+        m_posY = mi.rcMonitor.top  + S(kMargin);
     }
 
     UpdateVisuals();
@@ -85,23 +95,32 @@ LRESULT CALLBACK OSDWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         Hide();
         return 0;
     }
+    if (m == WM_DPICHANGED) {
+        // UpdateVisuals() sets the size for the monitor the OSD lands on, so the
+        // suggested rectangle is not applied.
+        s_dpi = LOWORD(w);
+        return 0;
+    }
     return DefWindowProc(h, m, w, l);
 }
 
 void OSDWindow::UpdateVisuals() {
     if (!hWnd) return;
 
+    const int width = S(kOSDWidth);
+    const int height = S(kOSDHeight);
+
     // Create a bitmap for off-screen drawing
-    Bitmap bitmap(kOSDWidth, kOSDHeight, PixelFormat32bppARGB);
+    Bitmap bitmap(width, height, PixelFormat32bppARGB);
     Graphics g(&bitmap);
     
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.Clear(Color(0, 0, 0, 0)); // Transparent background
     
     // Draw background (Rounded Rectangle)
-    Rect rect(0, 0, kOSDWidth, kOSDHeight);
+    Rect rect(0, 0, width, height);
     GraphicsPath path;
-    int cornerRadius = 8;
+    int cornerRadius = S(kCornerRadius);
     int dia = cornerRadius * 2;
     
     // Create rounded rect path
@@ -120,9 +139,9 @@ void OSDWindow::UpdateVisuals() {
     if (pct < 0) pct = 0;
     if (pct > 1) pct = 1;
     
-    int barMargin = 8;
-    int barH = kOSDHeight - (barMargin * 2);
-    int maxBarW = kOSDWidth - (barMargin * 2);
+    int barMargin = S(kBarMargin);
+    int barH = height - (barMargin * 2);
+    int maxBarW = width - (barMargin * 2);
     int barW = (int)(maxBarW * pct);
     
     if (barW > 0) {
@@ -130,7 +149,7 @@ void OSDWindow::UpdateVisuals() {
         
         // Rounded bar logic (simplified)
         GraphicsPath barPath;
-        int barCorner = 4;
+        int barCorner = S(kBarCorner);
         int barDia = barCorner * 2;
         
         // If bar is too small for rounded corners, just draw rect
@@ -156,7 +175,7 @@ void OSDWindow::UpdateVisuals() {
     bitmap.GetHBITMAP(Color(0, 0, 0, 0), &hBitmap);
     HBITMAP hOldBitmap = (HBITMAP)SelectObject(memDC, hBitmap);
     
-    SIZE size = { kOSDWidth, kOSDHeight };
+    SIZE size = { width, height };
     POINT ptSrc = { 0, 0 };
     POINT ptDst = { m_posX, m_posY };
     

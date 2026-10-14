@@ -1,4 +1,5 @@
 #include "TrayPopup.h"
+#include "Dpi.h"
 #include <gdiplus.h>
 #include <algorithm>
 
@@ -12,9 +13,18 @@ bool TrayPopup::m_disabled = false;
 std::wstring TrayPopup::m_note;
 
 static const wchar_t* kTrayPopupClass = L"StudioBrightnessTrayPopup";
+static int s_dpi = 96;  // DPI of the monitor the popup was last shown on
+
+// Layout at 96 DPI, scaled to the monitor the popup opens on (see Dpi.h).
 static const int kPopupWidth = 200;
 static const int kPopupHeight = 40;
 static const int kPopupMargin = 10; 
+static const int kTrackPadding = 16;  // room for the thumb at both ends of the track
+static const int kTrackHeight = 4;
+static const int kThumbDiameter = 16;
+static const float kNoteFontPt = 8.5f;
+
+static int S(int v) { return DpiScale(v, s_dpi); }
 
 void TrayPopup::Create() {
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
@@ -57,16 +67,22 @@ void TrayPopup::Show(HWND, int currentPercent, OnChangeCallback cb, bool disable
     GetMonitorInfo(hMon, &mi);
     const RECT& work = mi.rcWork;
 
-    int x = pt.x - (kPopupWidth / 2);
-    int y = pt.y - kPopupHeight - kPopupMargin;
+    // Size for that monitor before placing the popup on it.
+    s_dpi = DpiOfMonitor(hMon);
+    const int width = S(kPopupWidth);
+    const int height = S(kPopupHeight);
+    const int margin = S(kPopupMargin);
+
+    int x = pt.x - (width / 2);
+    int y = pt.y - height - margin;
 
     if (y < work.top)
-        y = pt.y + kPopupMargin;
+        y = pt.y + margin;
 
     if (x < work.left) x = work.left;
-    if (x + kPopupWidth > work.right) x = work.right - kPopupWidth;
+    if (x + width > work.right) x = work.right - width;
     
-    SetWindowPos(hWnd, HWND_TOPMOST, x, y, kPopupWidth, kPopupHeight, SWP_SHOWWINDOW);
+    SetWindowPos(hWnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
     SetForegroundWindow(hWnd);
     SetFocus(hWnd);
     
@@ -88,8 +104,10 @@ bool TrayPopup::IsVisible() {
 }
 
 void TrayPopup::UpdateFromMouse(int x) {
-    int padding = 16; // More padding for thumb
-    int w = kPopupWidth - (padding * 2);
+    RECT rc;
+    GetClientRect(hWnd, &rc);
+    int padding = S(kTrackPadding);
+    int w = rc.right - (padding * 2);
     if (w <= 0) return;
     
     int relX = x - padding;
@@ -112,32 +130,39 @@ void TrayPopup::Draw() {
     Graphics g(hdc);
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     
+    RECT rc;
+    GetClientRect(hWnd, &rc);
+    const int width = rc.right;
+    const int height = rc.bottom;
+
     // Background
     SolidBrush bgBrush(Color(255, 30, 30, 30));
-    g.FillRectangle(&bgBrush, 0, 0, kPopupWidth, kPopupHeight);
+    g.FillRectangle(&bgBrush, 0, 0, width, height);
     
-    // Border
-    Pen borderPen(Color(100, 255, 255, 255), 1.0f);
-    g.DrawRectangle(&borderPen, 0, 0, kPopupWidth - 1, kPopupHeight - 1);
+    // Border, inset by half its width so it is not clipped
+    const REAL borderW = (REAL)S(1);
+    Pen borderPen(Color(100, 255, 255, 255), borderW);
+    g.DrawRectangle(&borderPen, borderW / 2, borderW / 2, (REAL)width - borderW, (REAL)height - borderW);
 
     // Disabled (HDR) mode: show a note instead of an interactive slider.
     if (m_disabled) {
         FontFamily ff(L"Segoe UI");
-        Font font(&ff, 8.5f, FontStyleRegular, UnitPoint);
+        // In pixels at the monitor DPI: a size in points would follow the system DPI instead.
+        Font font(&ff, kNoteFontPt * (REAL)s_dpi / 72.0f, FontStyleRegular, UnitPixel);
         SolidBrush textBrush(Color(255, 185, 185, 185));
         StringFormat fmt;
         fmt.SetAlignment(StringAlignmentCenter);
         fmt.SetLineAlignment(StringAlignmentCenter);
-        RectF rect(6.0f, 2.0f, (REAL)(kPopupWidth - 12), (REAL)(kPopupHeight - 4));
+        RectF rect((REAL)S(6), (REAL)S(2), (REAL)(width - S(12)), (REAL)(height - S(4)));
         g.DrawString(m_note.c_str(), -1, &font, rect, &fmt, &textBrush);
         EndPaint(hWnd, &ps);
         return;
     }
 
-    int padding = 16;
-    int trackH = 4;
-    int trackY = (kPopupHeight - trackH) / 2;
-    int trackW = kPopupWidth - (padding * 2);
+    int padding = S(kTrackPadding);
+    int trackH = S(kTrackHeight);
+    int trackY = (height - trackH) / 2;
+    int trackW = width - (padding * 2);
     
     // Track Background
     SolidBrush trackBrush(Color(255, 80, 80, 80));
@@ -151,9 +176,9 @@ void TrayPopup::Draw() {
     }
     
     // Thumb
-    int thumbDia = 16;
+    int thumbDia = S(kThumbDiameter);
     int thumbX = padding + fillW - (thumbDia / 2);
-    int thumbY = (kPopupHeight - thumbDia) / 2;
+    int thumbY = (height - thumbDia) / 2;
     
     g.FillEllipse(&fillBrush, thumbX, thumbY, thumbDia, thumbDia);
     
@@ -193,6 +218,12 @@ LRESULT CALLBACK TrayPopup::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == VK_ESCAPE) {
             Hide();
         }
+        return 0;
+    case WM_DPICHANGED:
+        // Show() already sized the popup for the monitor it moves to, so the suggested
+        // rectangle is not applied. Only keep drawing and hit testing in step.
+        s_dpi = LOWORD(w);
+        InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
     return DefWindowProc(h, m, w, l);

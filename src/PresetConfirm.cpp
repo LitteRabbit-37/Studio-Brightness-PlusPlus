@@ -1,5 +1,6 @@
 #include "PresetConfirm.h"
 #include "HdrMonitor.h"
+#include "Dpi.h"
 #include <cstdio>
 
 HWND  PresetConfirm::hWnd = nullptr;
@@ -12,18 +13,6 @@ std::function<void()> PresetConfirm::m_onRevert = nullptr;
 static const wchar_t *kClass   = L"StudioBrightnessPresetConfirm";
 static const UINT_PTR kTimerId = 1;
 enum { ID_KEEP = 101, ID_REVERT = 102 };
-
-// DPI of the monitor the window currently sits on. GetDpiForWindow exists on
-// Windows 10 1607+ (this app declares PerMonitorV2); fall back to the device
-// caps just in case it returns 0.
-static int dpiForWindow(HWND h) {
-	UINT d = GetDpiForWindow(h);
-	if (d) return (int)d;
-	HDC dc = GetDC(h);
-	int caps = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
-	if (dc) ReleaseDC(h, dc);
-	return caps ? caps : 96;
-}
 
 void PresetConfirm::UpdateLabel() {
 	if (!m_label) return;
@@ -64,8 +53,8 @@ void PresetConfirm::Show(HINSTANCE hInst, int seconds, std::function<void()> onR
 		return;
 	}
 
-	const int dpi = dpiForWindow(hWnd);
-	auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+	const int dpi = DpiOfWindow(hWnd);
+	auto S = [dpi](int v) { return DpiScale(v, dpi); };
 
 	// Layout in 96-dpi reference units, scaled by S().
 	const int margin  = S(16);

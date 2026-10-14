@@ -1,5 +1,6 @@
 #include "LogWindow.h"
 #include "Log.h"
+#include "Dpi.h"
 #include "resource.h"
 #include <vector>
 #include <string>
@@ -11,15 +12,21 @@ HWND     LogWindow::hBtnCopy_ = nullptr;
 HWND     LogWindow::hBtnRecord_ = nullptr;
 HWND     LogWindow::hBtnFolder_ = nullptr;
 HFONT    LogWindow::hFont_    = nullptr;
+HFONT    LogWindow::hUiFont_  = nullptr;
+int      LogWindow::dpi_      = 96;
 UINT_PTR LogWindow::timerId_  = 0;
 size_t   LogWindow::nextIndex_ = 0;
 
+// Layout at 96 DPI, scaled to the monitor the window is on (see Dpi.h).
 static const wchar_t *kLogWndClass = L"StudioBrightnessLogWindow";
 static constexpr int   kWndW       = 700;
 static constexpr int   kWndH       = 460;
 static constexpr int   kBtnH       = 28;
-static constexpr int   kBtnW       = 140;
+static constexpr int   kBtnCopyW   = 140;
+static constexpr int   kBtnRecordW = 190;
+static constexpr int   kBtnFolderW = 150;
 static constexpr int   kPad        = 6;
+static constexpr int   kLogFontPx  = 16;
 static constexpr UINT_PTR kTimerRefresh = 100;
 static constexpr UINT  kRefreshMs      = 200;
 static constexpr int   kBtnCopyId      = 5001;
@@ -46,36 +53,77 @@ void LogWindow::Create() {
 	if (!hWnd_)
 		return;
 
-	// Copy button
-	hBtnCopy_ = CreateWindowExW(0, L"BUTTON", L"Copy to Clipboard",
-	                            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-	                            kPad, kPad, kBtnW, kBtnH,
-	                            hWnd_, (HMENU)(INT_PTR)kBtnCopyId, hInst, nullptr);
-	int xRec = kPad + kBtnW + kPad;
+	// Now that Windows has picked a monitor, size the window for its DPI.
+	dpi_ = DpiOfWindow(hWnd_);
+	SetWindowPos(hWnd_, nullptr, 0, 0, DpiScale(kWndW, dpi_), DpiScale(kWndH, dpi_),
+	             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// Controls are created at zero size, Layout() places them.
+	hBtnCopy_ = CreateWindowExW(0, L"BUTTON", L"Copy to Clipboard", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+	                            0, 0, 0, 0, hWnd_, (HMENU)(INT_PTR)kBtnCopyId, hInst, nullptr);
 	hBtnRecord_ = CreateWindowExW(0, L"BUTTON", L"Record to file", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-	                              xRec, kPad, 190, kBtnH, hWnd_, (HMENU)(INT_PTR)kBtnRecordId, hInst, nullptr);
+	                              0, 0, 0, 0, hWnd_, (HMENU)(INT_PTR)kBtnRecordId, hInst, nullptr);
 	hBtnFolder_ = CreateWindowExW(0, L"BUTTON", L"Open logs folder", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-	                              xRec + 190 + kPad, kPad, 150, kBtnH, hWnd_, (HMENU)(INT_PTR)kBtnFolderId, hInst, nullptr);
+	                              0, 0, 0, 0, hWnd_, (HMENU)(INT_PTR)kBtnFolderId, hInst, nullptr);
 	UpdateRecordButton();
 
 	// Read-only multiline edit
-	int editTop = kPad + kBtnH + kPad;
-	RECT rc;
-	GetClientRect(hWnd_, &rc);
 	hEdit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
 	                         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
 	                             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
-	                         kPad, editTop,
-	                         rc.right - kPad * 2,
-	                         rc.bottom - editTop - kPad,
-	                         hWnd_, nullptr, hInst, nullptr);
+	                         0, 0, 0, 0, hWnd_, nullptr, hInst, nullptr);
 
-	// Set monospace font
-	hFont_ = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-	                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-	                      CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
-	if (hFont_)
+	ApplyFonts();
+	Layout();
+}
+
+void LogWindow::ApplyFonts() {
+	HFONT oldMono = hFont_;
+	HFONT oldUi   = hUiFont_;
+
+	hFont_ = CreateFontW(-DpiScale(kLogFontPx, dpi_), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+	                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+	                     CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+
+	// The system message font at this DPI, the one dialogs use. Without a font of their own
+	// the buttons fall back to the unscaled bitmap System font.
+	NONCLIENTMETRICSW ncm{};
+	ncm.cbSize = sizeof(ncm);
+	if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, (UINT)dpi_))
+		hUiFont_ = CreateFontIndirectW(&ncm.lfMessageFont);
+	else
+		hUiFont_ = CreateFontW(-DpiScale(12, dpi_), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+		                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		                       CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Segoe UI");
+
+	if (hEdit_ && hFont_)
 		SendMessage(hEdit_, WM_SETFONT, (WPARAM)hFont_, TRUE);
+	for (HWND btn : {hBtnCopy_, hBtnRecord_, hBtnFolder_})
+		if (btn && hUiFont_)
+			SendMessage(btn, WM_SETFONT, (WPARAM)hUiFont_, TRUE);
+
+	// The controls hold the new fonts now, the old ones can go.
+	if (oldMono) DeleteObject(oldMono);
+	if (oldUi) DeleteObject(oldUi);
+}
+
+void LogWindow::Layout() {
+	if (!hWnd_)
+		return;
+	auto S = [](int v) { return DpiScale(v, dpi_); };
+	const int pad = S(kPad), btnH = S(kBtnH);
+	int x = pad;
+	if (hBtnCopy_)   MoveWindow(hBtnCopy_, x, pad, S(kBtnCopyW), btnH, TRUE);
+	x += S(kBtnCopyW) + pad;
+	if (hBtnRecord_) MoveWindow(hBtnRecord_, x, pad, S(kBtnRecordW), btnH, TRUE);
+	x += S(kBtnRecordW) + pad;
+	if (hBtnFolder_) MoveWindow(hBtnFolder_, x, pad, S(kBtnFolderW), btnH, TRUE);
+
+	RECT rc;
+	GetClientRect(hWnd_, &rc);
+	const int editTop = pad + btnH + pad;
+	if (hEdit_)
+		MoveWindow(hEdit_, pad, editTop, rc.right - pad * 2, rc.bottom - editTop - pad, TRUE);
 }
 
 void LogWindow::Show() {
@@ -208,12 +256,19 @@ LRESULT CALLBACK LogWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 		}
 		break;
 
-	case WM_SIZE: {
-		RECT rc;
-		GetClientRect(h, &rc);
-		int editTop = kPad + kBtnH + kPad;
-		if (hEdit_)
-			MoveWindow(hEdit_, kPad, editTop, rc.right - kPad * 2, rc.bottom - editTop - kPad, TRUE);
+	case WM_SIZE:
+		Layout();
+		return 0;
+
+	case WM_DPICHANGED: {
+		// Moved to a monitor with another scale: take the size Windows suggests for it,
+		// then rebuild the fonts and the layout at the new DPI.
+		dpi_ = LOWORD(w);
+		ApplyFonts();
+		const RECT *r = reinterpret_cast<const RECT *>(l);
+		SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+		             SWP_NOZORDER | SWP_NOACTIVATE);
+		Layout();
 		return 0;
 	}
 
@@ -225,6 +280,10 @@ LRESULT CALLBACK LogWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 		if (hFont_) {
 			DeleteObject(hFont_);
 			hFont_ = nullptr;
+		}
+		if (hUiFont_) {
+			DeleteObject(hUiFont_);
+			hUiFont_ = nullptr;
 		}
 		hWnd_ = nullptr;
 		hEdit_ = nullptr;
