@@ -1179,6 +1179,7 @@ void startWorker() {
 					lastEnumerateTick = now;
 
 					auto found = hid_enumerate();
+					bool added = false;
 					for (auto &newDev : found) {
 						bool exists = false;
 						for (const auto &existing : g_displays) {
@@ -1242,6 +1243,18 @@ void startWorker() {
 						}
 
 						g_displays.push_back(std::move(newDev));
+						added = true;
+					}
+
+					// Each display keeps its own brightness in firmware, so at launch (or after a
+					// reconnect) linked displays can disagree until the slider moves. Align them on
+					// the active display now, as a user action so auto-brightness re-anchors too.
+					if (added && g_settings.linkedMode && g_displays.size() > 1) {
+						ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+						const auto &ref = g_displays[idx];
+						Log::Info(L"Linked mode: aligning displays on %s (%lu)", ref.name.c_str(),
+						          ref.currentBrightness);
+						SetBrightnessLinked(ref.currentBrightness, ref, true, false);
 					}
 				}
 			}
