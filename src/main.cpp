@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#include <dbt.h>
 #include <commctrl.h>
 #include <initguid.h>
 #include <sensorsapi.h>
@@ -76,6 +77,9 @@ static UINT g_wmTaskbarCreated = 0;
 /* ---------- multi-display state ---------- */
 static std::vector<DisplayDevice> g_displays;
 static std::mutex                 g_displayMutex;
+// Set when an Apple HID interface arrives, so the worker re-scans even while displays are
+// already connected: a second display plugged in later, or one whose HID shows up late at boot.
+static std::atomic<bool>          g_rescanRequested{false};
 
 /* ---------- Per-display color-preset persistence (HKCU\...\Presets\{ContainerId}) ---------- */
 static std::wstring guidToString(const GUID &g) {
@@ -880,6 +884,15 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		RefreshHdrState();
 		return 0;
 	}
+	if (m == WM_DEVICECHANGE && wParam == DBT_DEVICEARRIVAL) {
+		// Only Apple interfaces: a full scan logs every interface, so a mouse or a USB stick
+		// should not trigger one. Removals are caught by the worker's liveness check.
+		auto *hdr = (const DEV_BROADCAST_HDR *)lParam;
+		if (hdr && hdr->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE &&
+		    StrStrIW(((const DEV_BROADCAST_DEVICEINTERFACE_W *)hdr)->dbcc_name, L"vid_05ac"))
+			g_rescanRequested.store(true);
+		return TRUE;
+	}
 	if (m == WM_HOTKEY) {
 		if (wParam == ID_HOTKEY_UP) {
 			adjustBrightnessByStep(+1);
@@ -1172,11 +1185,12 @@ void startWorker() {
 					    g_displays.end());
 				}
 
-				// Re-scan for new devices only when needed (empty or device lost)
+				// Re-scan for new devices only when needed (empty, device lost, or a device change)
 				DWORD now = GetTickCount();
-				bool needScan = g_displays.empty() || anyDead;
+				bool needScan = g_displays.empty() || anyDead || g_rescanRequested.load();
 				if (needScan && now - lastEnumerateTick >= kEnumerateCooldownMs) {
 					lastEnumerateTick = now;
+					g_rescanRequested.store(false); // before enumerating, so a change during it re-arms
 
 					auto found = hid_enumerate();
 					bool added = false;
@@ -1360,6 +1374,14 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 		CloseHandle(hSingleInstance);
 		return 1;
 	}
+
+	// HID interface arrivals reach HiddenWndProc as DBT_DEVICEARRIVAL (re-scan for displays).
+	DEV_BROADCAST_DEVICEINTERFACE_W hidFilter{};
+	hidFilter.dbcc_size       = sizeof(hidFilter);
+	hidFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+	HidD_GetHidGuid(&hidFilter.dbcc_classguid);
+	if (!RegisterDeviceNotificationW(h, &hidFilter, DEVICE_NOTIFY_WINDOW_HANDLE))
+		Log::Warn(L"RegisterDeviceNotification failed (%lu)", GetLastError());
 
 	if (!AddNotificationIcon(h)) {
 		MessageBoxW(nullptr,
