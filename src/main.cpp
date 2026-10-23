@@ -61,6 +61,7 @@ constexpr wchar_t kAppVersion[] = SBPP_VERSION_STR;
 constexpr UINT     WMAPP_UPDATE_READY = WM_APP + 2;
 constexpr UINT_PTR ID_UPDATE_TIMER    = 0xA001;
 constexpr UINT_PTR ID_HDR_TIMER       = 0xA002;
+constexpr UINT_PTR ID_REAPPLY_TIMER   = 0xA003;
 static std::atomic<bool> g_updateAvailable{false};
 static std::atomic<bool> g_updateChecking{false};
 static std::mutex        g_updateMutex;
@@ -80,6 +81,8 @@ static std::mutex                 g_displayMutex;
 // Set when an Apple HID interface arrives, so the worker re-scans even while displays are
 // already connected: a second display plugged in later, or one whose HID shows up late at boot.
 static std::atomic<bool>          g_rescanRequested{false};
+// Set by ID_REAPPLY_TIMER once the displays are back on; the worker sends the brightness again.
+static std::atomic<bool>          g_reapplyRequested{false};
 
 /* ---------- Per-display color-preset persistence (HKCU\...\Presets\{ContainerId}) ---------- */
 static std::wstring guidToString(const GUID &g) {
@@ -573,6 +576,33 @@ static void SetBrightnessLinked(ULONG val, const DisplayDevice &refDev, bool isU
 	}
 }
 
+// The value an Apple display reports is only the last one it was sent. After a boot, a restart
+// or a sleep its panel can come back at the firmware default while still reporting that value,
+// so reading it tells nothing (#28). Send the brightness again regardless: one unit off first,
+// so the display sees a real change like a slider move, then the value itself.
+static void ReapplyBrightness(const wchar_t *reason) {
+	if (g_hdrActive.load() || g_displays.empty()) return;
+
+	if (g_settings.linkedMode && g_displays.size() > 1) {
+		ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+		const auto &ref = g_displays[idx];
+		SetBrightnessLinked(ref.currentBrightness, ref, true, false);
+	}
+
+	for (auto &dev : g_displays) {
+		if (dev.maxBrightness <= dev.minBrightness || dev.activePresetLocksBrightness())
+			continue;
+		ULONG val   = std::clamp(dev.currentBrightness, dev.minBrightness, dev.maxBrightness);
+		ULONG nudge = (val < dev.maxBrightness) ? val + 1 : val - 1;
+		if (dev.setBrightness(nudge) != 0 || dev.setBrightness(val) != 0) {
+			Log::Warn(L"Reapplying brightness failed on %s (%s)", dev.name.c_str(), reason);
+			continue;
+		}
+		dev.currentBrightness = val;
+		Log::Info(L"Reapplied brightness %lu to %s (%s)", val, dev.name.c_str(), reason);
+	}
+}
+
 // Apply brightness change based on current mode (linked or single display)
 static void ApplyBrightness(ULONG val, bool isUserAction, bool showOSD) {
 	std::lock_guard<std::mutex> lock(g_displayMutex);
@@ -875,6 +905,14 @@ static std::wstring buildDisplayStatusLine() {
 }
 
 /* ---------- hidden window & WndProc ---------- */
+// A panel takes a moment to light up after Windows turns it on, so reapply 3 s and 6 s later
+// rather than once right away. A new event restarts the count.
+static int g_reapplyPassesLeft = 0;
+static void scheduleReapply(HWND h) {
+	g_reapplyPassesLeft = 2;
+	SetTimer(h, ID_REAPPLY_TIMER, 3000, nullptr);
+}
+
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	if (g_wmTaskbarCreated && m == g_wmTaskbarCreated) {
 		AddNotificationIcon(h);
@@ -882,6 +920,26 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	}
 	if (m == WM_DISPLAYCHANGE) {
 		RefreshHdrState();
+		scheduleReapply(h);
+		return 0;
+	}
+	if (m == WM_POWERBROADCAST && wParam == PBT_POWERSETTINGCHANGE) {
+		// Console display state: 0 off, 1 on, 2 dimmed. Windows sends the current state right
+		// after registering, so only a change from off or dimmed to on counts.
+		static DWORD lastState = 1;
+		auto *ps = (const POWERBROADCAST_SETTING *)lParam;
+		if (ps && IsEqualGUID(ps->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) && ps->DataLength >= sizeof(DWORD)) {
+			DWORD state = *(const DWORD *)ps->Data;
+			if (state == 1 && lastState != 1)
+				scheduleReapply(h);
+			lastState = state;
+		}
+		return TRUE;
+	}
+	if (m == WM_TIMER && wParam == ID_REAPPLY_TIMER) {
+		g_reapplyRequested.store(true);
+		if (--g_reapplyPassesLeft <= 0)
+			KillTimer(h, ID_REAPPLY_TIMER);
 		return 0;
 	}
 	if (m == WM_DEVICECHANGE && wParam == DBT_DEVICEARRIVAL) {
@@ -1260,17 +1318,14 @@ void startWorker() {
 						added = true;
 					}
 
-					// Each display keeps its own brightness in firmware, so at launch (or after a
-					// reconnect) linked displays can disagree until the slider moves. Align them on
-					// the active display now, as a user action so auto-brightness re-anchors too.
-					if (added && g_settings.linkedMode && g_displays.size() > 1) {
-						ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
-						const auto &ref = g_displays[idx];
-						Log::Info(L"Linked mode: aligning displays on %s (%lu)", ref.name.c_str(),
-						          ref.currentBrightness);
-						SetBrightnessLinked(ref.currentBrightness, ref, true, false);
-					}
+					// At launch or after a reconnect, the panels may not show what they report.
+					if (added)
+						ReapplyBrightness(L"display found");
 				}
+
+				// Displays powered back on (sleep, monitor standby) or reconfigured: same reason.
+				if (g_reapplyRequested.exchange(false))
+					ReapplyBrightness(L"displays back on");
 			}
 
 			/* ---------- auto-brightness (Apple-style hysteresis + asymmetric perceptual ramp) ---------- */
@@ -1382,6 +1437,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	HidD_GetHidGuid(&hidFilter.dbcc_classguid);
 	if (!RegisterDeviceNotificationW(h, &hidFilter, DEVICE_NOTIFY_WINDOW_HANDLE))
 		Log::Warn(L"RegisterDeviceNotification failed (%lu)", GetLastError());
+	// Displays turning back on (wake from sleep, monitor standby) reach HiddenWndProc as
+	// WM_POWERBROADCAST, so the brightness can be sent again (#28).
+	if (!RegisterPowerSettingNotification(h, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE))
+		Log::Warn(L"RegisterPowerSettingNotification failed (%lu)", GetLastError());
 
 	if (!AddNotificationIcon(h)) {
 		MessageBoxW(nullptr,
