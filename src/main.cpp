@@ -61,7 +61,7 @@ constexpr wchar_t kAppVersion[] = SBPP_VERSION_STR;
 
 // Update state, filled by the background update-check thread.
 constexpr UINT     WMAPP_UPDATE_READY = WM_APP + 2;
-constexpr UINT     WMAPP_OPTIONS_ROWS = WM_APP + 3; // Options dialog: lay its rows out again (see layOutRows)
+constexpr UINT     WMAPP_OPTIONS_RESCALE = WM_APP + 3; // Options dialog: lay it out for another scaling (see rescaleOptions)
 constexpr UINT     WMAPP_OPTIONS_SHOW = WM_APP + 4; // Options dialog: scroll a control (wParam) into view
 constexpr UINT_PTR ID_UPDATE_TIMER    = 0xA001;
 constexpr UINT_PTR ID_HDR_TIMER       = 0xA002;
@@ -995,11 +995,21 @@ struct PageItem {
 	int  follow;  // the dialog's right edge: 0 not at all, 1 with its own right edge, 2 as a whole
 	bool clipped; // has a window region at the moment
 };
+// Where a control is as the dialog opens (see noteAsOpened).
+struct OpenedItem {
+	HWND ctrl;
+	RECT at;   // in the dialog
+	int  open; // a dropdown list: its height with the list open
+};
 struct OptionsState {
 	DisplaysView shown;            // what the display and preset lists were last filled from
 	bool         filled = false;   // not before the first fill
 	HWND         tip    = nullptr; // the tooltip: the explanations, and why a control is disabled
 	SliderMarks  marks;            // what the slider has been given to mark
+
+	// The dialog as it opened: what it is laid out from again for another scaling (see placeAsOpened).
+	std::vector<OpenedItem> opened;
+	SIZE openedUnits = {}; // the size of the dialog units those places were measured with
 
 	// The scrolling part (see layOutPage).
 	std::vector<PageItem> page;
@@ -1009,9 +1019,16 @@ struct OptionsState {
 	int  content    = 0;     // how high everything that scrolls is
 	int  scroll     = 0;     // how far it is scrolled
 	RECT view       = {};    // the part of the dialog it shows through, as last laid out
+	SIZE units      = {};    // the size of the dialog units all of the above is measured with
+	SIZE client     = {};    // the client size the dialog had when it was last told of one
+	SIZE wanted     = {};    // the client size to keep: the user's or the full one (see sizeDialog)
+	int  scrollKept = 0;     // how far it was scrolled at the last change of scaling, in the units of `wanted`...
+	int  scrollThen = 0;     // ...and in the pixels that came to
+	bool sizing     = false; // the dialog is setting its size itself
+	bool dragged    = false; // the user is moving or sizing the dialog with the mouse
 	int  wheel      = 0;     // mouse wheel movement not yet turned into scrolling
 	bool wheelKept  = false; // a control is using the wheel itself (see PageCtrlProc)
-	bool rescaling  = false; // between WM_DPICHANGED and the layout that follows it
+	bool rescaling  = false; // from the first word of another scaling until all is laid out for it
 };
 static OptionsState *optionsState(HWND d) {
 	return (OptionsState *)GetWindowLongPtrW(d, DWLP_USER);
@@ -1241,13 +1258,13 @@ static int textLineTop(HWND d, HWND input, int lineHeight) {
 // off the text beside it: an offset in the template is right at one scaling only.
 // This sets the rows right from what the controls measure:
 //  - an edit box or a hotkey box gets the height of a dropdown list, around its own middle;
-//  - a dropdown list goes to the middle of the row the template gives it. Only when the dialog
-//    opens: it is the one step here that would not come out the same if repeated;
+//  - a dropdown list goes to the middle of the row the template gives it;
 //  - a label goes onto the line of text of the input it shares a row with;
 //  - the slider goes with its channel on the middle of that line.
-// Runs when the dialog opens and again after Windows has rescaled the dialog for a monitor
-// with another scaling, which stretches or shrinks every control alike.
-static void layOutRows(HWND d, bool opening) {
+// Runs when the dialog opens and again for a monitor with another scaling, each time with the
+// controls where they were as the dialog opened (see placeAsOpened): the second step would not
+// come out the same from where a previous run has left them.
+static void layOutRows(HWND d) {
 	RECT rc     = rectInDialog(d, GetDlgItem(d, IDC_PRESET_COMBO));
 	int  height = rc.bottom - rc.top; // of a dropdown list, and so of every input
 	RECT row    = {0, 0, 0, 14};      // the height of a row of inputs in the template, in dialog units
@@ -1278,9 +1295,9 @@ static void layOutRows(HWND d, bool opening) {
 	for (HWND c = GetWindow(d, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
 		rc = rectInDialog(d, c);
 		if (isClass(c, WC_COMBOBOXW)) {
-			if (opening) // moved, not sized: the size of a dropdown list is the size of its open list
-				SetWindowPos(c, nullptr, rc.left, rc.top + (row.bottom - height) / 2, 0, 0,
-				             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+			// Moved, not sized: the size of a dropdown list is the size of its open list.
+			SetWindowPos(c, nullptr, rc.left, rc.top + (row.bottom - height) / 2, 0, 0,
+			             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 		} else if (isClass(c, WC_EDITW) || isClass(c, HOTKEY_CLASSW)) {
 			rc.top    = (rc.top + rc.bottom - height) / 2;
 			rc.bottom = rc.top + height;
@@ -1323,6 +1340,60 @@ static void layOutRows(HWND d, bool opening) {
 	rc = rectInDialog(d, slider);
 	OffsetRect(&rc, 0, textLineTop(d, GetDlgItem(d, IDC_SLIDER_PERCENT), tm.tmHeight) + tm.tmHeight / 2 - middle.y);
 	moveInDialog(slider, rc);
+}
+
+// The size of the dialog units at the moment, in pixels: of 4 horizontal ones and of 8 vertical
+// ones, which is how they are defined. They follow the font, and the font follows the scaling of
+// the monitor.
+static SIZE dialogUnits(HWND d) {
+	RECT rc = {0, 0, 4, 8};
+	MapDialogRect(d, &rc);
+	return {std::max(rc.right, 1L), std::max(rc.bottom, 1L)};
+}
+
+// Note where everything is as the dialog opens: where the template has put it, and where a spin
+// control has then put itself and its edit box.
+// On a monitor with another scaling the dialog is laid out from these places again. Windows
+// does rescale the controls of a dialog itself, but from wherever they are at that moment, and
+// here that is where scrolling and resizing have them; and each such step is rounded, so that
+// going back and forth between two monitors would add up.
+static void noteAsOpened(HWND d) {
+	OptionsState *os = optionsState(d);
+	if (!os)
+		return;
+	os->opened.clear();
+	os->openedUnits = dialogUnits(d);
+	for (HWND c = GetWindow(d, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+		OpenedItem item = {c, rectInDialog(d, c), 0};
+		if (isClass(c, WC_COMBOBOXW)) {
+			RECT open = {};
+			SendMessageW(c, CB_GETDROPPEDCONTROLRECT, 0, (LPARAM)&open);
+			item.open = open.bottom - open.top;
+		}
+		os->opened.push_back(item);
+	}
+}
+
+// Put everything where it was as the dialog opened, in the dialog units of the moment: where a
+// dialog opened at this scaling has it, to a pixel or so. Edges are converted and not sizes, so
+// that what touched still touches.
+static void placeAsOpened(HWND d) {
+	OptionsState *os = optionsState(d);
+	if (!os || os->opened.empty())
+		return;
+	const SIZE now = dialogUnits(d), then = os->openedUnits;
+	HDWP       batch = BeginDeferWindowPos((int)os->opened.size());
+	for (const OpenedItem &item : os->opened) {
+		SetWindowRgn(item.ctrl, nullptr, FALSE); // scrolling may have left it cut (see layOutPage)
+		RECT rc     = {MulDiv(item.at.left, now.cx, then.cx), MulDiv(item.at.top, now.cy, then.cy)};
+		rc.right    = MulDiv(item.at.right, now.cx, then.cx);
+		rc.bottom   = MulDiv(item.at.bottom, now.cy, then.cy);
+		int  height = item.open ? MulDiv(item.open, now.cy, then.cy) : rc.bottom - rc.top;
+		if (batch)
+			batch = DeferWindowPos(batch, item.ctrl, nullptr, rc.left, rc.top, rc.right - rc.left, height, SWP_NOZORDER | SWP_NOACTIVATE);
+	}
+	if (batch)
+		EndDeferWindowPos(batch);
 }
 
 // Longer explanations, each shown as a tooltip when hovering the label it belongs to; for a
@@ -1535,9 +1606,9 @@ static const wchar_t *cursorAt(HWND d, POINT at) {
 /* ---------- the scrolling part of the dialog ---------- */
 // The dialog can be made lower than what it has to show, and opens lower on a screen that is
 // not high enough for it. Everything except the row of buttons at the bottom then scrolls.
-// The controls stay direct children of the dialog, so that Windows goes on rescaling them for
-// a monitor with another scaling and nothing else here has to know. Scrolling moves them, and
-// none shows, or takes the mouse, outside the scrolling part (see layOutPage).
+// The controls stay direct children of the dialog, so that Windows goes on giving them the font
+// of a monitor with another scaling. Scrolling moves them, and none shows, or takes the mouse,
+// outside the scrolling part (see layOutPage).
 // Made wider, the dialog gives the room to the controls that can use it.
 static const int kPageButtons[] = {IDC_RESET_SHORTCUTS, IDOK, IDCANCEL}; // the first keeps left, the others right
 // Following the right edge of the dialog: with its own right edge, so that it stretches...
@@ -1565,6 +1636,7 @@ static void capturePage(HWND d) {
 	RECT design = {0, 0, OPTIONS_DLG_W, OPTIONS_DLG_H};
 	MapDialogRect(d, &design);
 	os->design = {design.right, design.bottom};
+	os->units  = dialogUnits(d);
 	os->scroll = 0;
 	os->page.clear();
 
@@ -1594,15 +1666,13 @@ static void capturePage(HWND d) {
 	os->content = std::max((int)bottom, std::min((int)bottom + margin, os->pageEnd));
 }
 
-// Put everything where the size of the dialog and the scrolling have it. `asDesigned` is for
-// the dialog as the template gives it, whatever size it has at the moment.
-static void layOutPage(HWND d, bool asDesigned = false) {
+// Put everything where the size of the dialog and the scrolling have it.
+static void layOutPage(HWND d) {
 	OptionsState *os = optionsState(d);
 	if (!os || os->page.empty())
 		return;
-	RECT client = {0, 0, os->design.cx, os->design.cy};
-	if (!asDesigned)
-		GetClientRect(d, &client);
+	RECT client;
+	GetClientRect(d, &client);
 	int  strip = os->design.cy - os->pageEnd; // the row of buttons keeps its height
 	int  viewH = std::max(0, (int)client.bottom - strip);
 	bool bar   = os->content > viewH;
@@ -1731,18 +1801,77 @@ static void showInPage(HWND d, HWND ctrl) {
 	}
 }
 
-// On a screen that is not high enough for the whole dialog, open as high as the screen allows.
-static void fitDialogToScreen(HWND d) {
-	RECT        window;
-	MONITORINFO mi = {sizeof(mi)};
-	if (!GetWindowRect(d, &window) || !GetMonitorInfoW(MonitorFromWindow(d, MONITOR_DEFAULTTONEAREST), &mi))
+// How small and how high the client area of the dialog may be: no narrower than designed, no
+// lower than a few rows over the buttons, and no higher than everything there is to show.
+struct SizeLimits {
+	int minWidth, minHeight, maxHeight;
+};
+static SizeLimits sizeLimits(HWND d, const OptionsState &os) {
+	int strip = os.design.cy - os.pageEnd;
+	return {(int)os.design.cx, std::min(os.content, dialogUnitsY(d, 120)) + strip, std::max(os.content, os.pageEnd) + strip};
+}
+
+// The client size to keep is held in 64ths of a dialog unit: it has to come out as the same
+// pixels again at the same scaling, and as the same share of the dialog at another.
+constexpr int kSizeUnit = 64;
+static SIZE   sizeToKeep(HWND d, SIZE pixels) {
+	SIZE units = dialogUnits(d);
+	return {MulDiv(pixels.cx, 4 * kSizeUnit, units.cx), MulDiv(pixels.cy, 8 * kSizeUnit, units.cy)};
+}
+static SIZE sizeKept(HWND d, SIZE kept) {
+	SIZE units = dialogUnits(d);
+	return {MulDiv(kept.cx, units.cx, 4 * kSizeUnit), MulDiv(kept.cy, units.cy, 8 * kSizeUnit)};
+}
+
+// Give the dialog the size it is to have: the one the user gave it, or its full size until then,
+// but no higher than the monitor it is on has room for. What the monitor takes off is not
+// forgotten: on a monitor with the room the dialog has its height back.
+// As it opens, the dialog is also put on that monitor whole. Later it stays where the user has
+// put it.
+static void sizeDialog(HWND d, bool opening) {
+	OptionsState *os = optionsState(d);
+	RECT          window, client;
+	MONITORINFO   mi = {sizeof(mi)};
+	if (!os || os->page.empty() || os->rescaling || !GetWindowRect(d, &window) || !GetClientRect(d, &client))
 		return;
-	const RECT &work = mi.rcWork;
-	int width  = window.right - window.left;
-	int height = std::min((int)(window.bottom - window.top), (int)(work.bottom - work.top));
+	if (!GetMonitorInfoW(MonitorFromWindow(d, MONITOR_DEFAULTTONEAREST), &mi))
+		return;
+	const RECT      &work   = mi.rcWork;
+	const SizeLimits limits = sizeLimits(d, *os);
+	const SIZE       kept   = sizeKept(d, os->wanted);
+	int frameW = (window.right - window.left) - client.right, frameH = (window.bottom - window.top) - client.bottom;
+	int width  = std::max((int)kept.cx, limits.minWidth) + frameW;
+	int height = std::clamp((int)kept.cy, limits.minHeight, limits.maxHeight) + frameH;
+	height     = std::min(height, (int)(work.bottom - work.top));
 	int x      = std::max((int)work.left, std::min((int)window.left, (int)work.right - width));
 	int y      = std::max((int)work.top, std::min((int)window.top, (int)work.bottom - height));
-	SetWindowPos(d, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+	os->sizing = true;
+	SetWindowPos(d, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE | (opening ? 0 : SWP_NOMOVE));
+	os->sizing = false;
+}
+
+// The dialog is on a monitor with another scaling, and Windows has given it and its controls the
+// font for it: lay it out as a dialog opened there is, and keep what the user has done to it,
+// its size and how far it is scrolled.
+static void rescaleOptions(HWND d) {
+	OptionsState *os = optionsState(d);
+	if (!os)
+		return;
+	// How far it is scrolled is kept as the size is, in units that come out the same again:
+	// unless the user has scrolled since, the place is the one kept the last time.
+	if (os->scroll != os->scrollThen)
+		os->scrollKept = MulDiv(os->scroll, 8 * kSizeUnit, std::max(os->units.cy, 1L));
+	placeAsOpened(d);
+	layOutRows(d);
+	capturePage(d);
+	os->scroll     = sizeKept(d, {0, os->scrollKept}).cy; // layOutPage sees that it is not too far
+	os->scrollThen = os->scroll;
+	os->rescaling  = false;
+	// While the dialog is being dragged its size is the one Windows keeps for the drag, and any
+	// other is undone at the next move of the mouse: its size waits for the end of the drag.
+	if (!os->dragged)
+		sizeDialog(d, false);
+	layOutPage(d);
 }
 
 // Every control of the scrolling part is watched for two things.
@@ -2039,9 +2168,14 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		EnableWindow(GetDlgItem(d, IDC_HOTKEY_DOWN), g_settings.enableCustomHotkeys);
 		setDlgHotkey(d, IDC_HOTKEY_UP, g_settings.hkUp);
 		setDlgHotkey(d, IDC_HOTKEY_DOWN, g_settings.hkDown);
-		layOutRows(d, true);
+		noteAsOpened(d);
+		layOutRows(d);
 		capturePage(d); // before the tooltips, which go by where the controls are
 		if (OptionsState *os = optionsState(d)) {
+			RECT client;
+			GetClientRect(d, &client);
+			os->client = {client.right, client.bottom};
+			os->wanted = {OPTIONS_DLG_W * kSizeUnit, OPTIONS_DLG_H * kSizeUnit}; // the full size
 			os->tip = addHelpTexts(d);
 			for (const PageItem &item : os->page)
 				SetWindowSubclass(item.ctrl, PageCtrlProc, kPageCtrlSubclass, 0);
@@ -2059,30 +2193,39 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 
 		// The displays, the presets of the active one, and where its brightness is.
 		syncOptions(d, true, true);
-		fitDialogToScreen(d);
+		sizeDialog(d, true);
 		layOutPage(d);
 		SetTimer(d, ID_OPTIONS_TIMER, 200, nullptr);
 		return TRUE;
 	}
+	case WM_GETDPISCALEDSIZE:
 	case WM_DPICHANGED:
-		// Moved to a monitor with another scaling. Windows rescales the dialog and everything in
-		// it once this message has gone unanswered, from where each control is at that moment:
-		// so put them where the layout has them first, unscrolled. The rows and the scrolling
-		// part are seen to after that.
-		if (OptionsState *os = optionsState(d)) {
+		// Moved to a monitor with another scaling. Windows gives the dialog and its controls the
+		// font for it and resizes the dialog, and does so between these two messages: the first
+		// comes here before any of it, the second after all of it. Until the dialog is laid out
+		// for the new scaling, what is known of its layout is for the old one: it must neither be
+		// laid out from when the size changes, nor limit that size. The layout is done from a
+		// posted message, which comes when Windows is through with its part.
+		if (OptionsState *os = optionsState(d); os && !os->rescaling) {
 			os->rescaling = true;
-			os->scroll    = 0;
-			layOutPage(d, true);
+			PostMessageW(d, WMAPP_OPTIONS_RESCALE, 0, 0);
 		}
-		PostMessageW(d, WMAPP_OPTIONS_ROWS, 0, 0);
 		break;
-	case WMAPP_OPTIONS_ROWS:
-		layOutRows(d, false);
-		if (OptionsState *os = optionsState(d))
-			os->rescaling = false;
-		capturePage(d);
-		layOutPage(d);
+	case WMAPP_OPTIONS_RESCALE:
+		rescaleOptions(d);
 		return TRUE;
+	case WM_ENTERSIZEMOVE:
+		if (OptionsState *os = optionsState(d))
+			os->dragged = true;
+		break;
+	case WM_EXITSIZEMOVE:
+		// Put down, maybe on another monitor: there it may have to be lower, or have the room to
+		// be as high as it was.
+		if (OptionsState *os = optionsState(d)) {
+			os->dragged = false;
+			sizeDialog(d, false);
+		}
+		break;
 	case WM_NOTIFY: {
 		const NMHDR *nm = (const NMHDR *)lp;
 		if (nm->idFrom != IDC_BRIGHTNESS_SLIDER || nm->code != NM_CUSTOMDRAW)
@@ -2131,24 +2274,35 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		return TRUE;
 	}
 	case WM_SIZE:
-		if (const OptionsState *os = optionsState(d); os && !os->rescaling)
-			layOutPage(d);
+		if (OptionsState *os = optionsState(d)) {
+			SIZE now = {LOWORD(lp), HIWORD(lp)};
+			if (!os->rescaling && !os->sizing && wp == SIZE_RESTORED) {
+				// The user's doing: what has changed is the size to keep from now on.
+				SIZE keep = sizeToKeep(d, now);
+				if (now.cx != os->client.cx)
+					os->wanted.cx = keep.cx;
+				if (now.cy != os->client.cy)
+					os->wanted.cy = keep.cy;
+			}
+			os->client = now;
+			if (!os->rescaling)
+				layOutPage(d);
+		}
 		break;
 	case WM_GETMINMAXINFO: {
-		// No narrower than designed, no lower than a few rows over the buttons, and no higher
-		// than everything there is to show.
+		// The limits are for the scaling the dialog is laid out for (see WM_DPICHANGED).
 		const OptionsState *os = optionsState(d);
-		if (!os || os->page.empty())
+		if (!os || os->page.empty() || os->rescaling)
 			break;
 		RECT window, client;
 		GetWindowRect(d, &window);
 		GetClientRect(d, &client);
-		int   frameW = (window.right - window.left) - client.right;
-		int   frameH = (window.bottom - window.top) - client.bottom;
-		int   strip  = os->design.cy - os->pageEnd;
-		auto *sizes  = (MINMAXINFO *)lp;
-		sizes->ptMinTrackSize   = {os->design.cx + frameW, std::min(os->content, dialogUnitsY(d, 120)) + strip + frameH};
-		sizes->ptMaxTrackSize.y = std::max(os->content, os->pageEnd) + strip + frameH;
+		int              frameW = (window.right - window.left) - client.right;
+		int              frameH = (window.bottom - window.top) - client.bottom;
+		const SizeLimits limits = sizeLimits(d, *os);
+		auto            *sizes  = (MINMAXINFO *)lp;
+		sizes->ptMinTrackSize   = {limits.minWidth + frameW, limits.minHeight + frameH};
+		sizes->ptMaxTrackSize.y = limits.maxHeight + frameH;
 		return TRUE;
 	}
 	case WM_MOUSEWHEEL: {
