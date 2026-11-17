@@ -2,6 +2,11 @@
 #include "resource.h"
 #include "version.h"
 
+// Trackbar style that older resource headers stop short of.
+#ifndef TBS_DOWNISLEFT
+#define TBS_DOWNISLEFT 0x0400
+#endif
+
 IDI_MYICON ICON "studio-brightness-plusplus.ico"
 
 VS_VERSION_INFO VERSIONINFO
@@ -33,35 +38,120 @@ BEGIN
     END
 END
 
-IDD_OPTIONS DIALOGEX 0, 0, 260, 290
-STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+IDD_OPTIONS DIALOGEX 0, 0, OPTIONS_DLG_W, OPTIONS_DLG_H
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN
 CAPTION "Options"
 FONT 9, "Segoe UI"
 BEGIN
-    CONTROL "Enable automatic brightness", IDC_AUTO_BRIGHTNESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 8, 180, 12
-    CONTROL "Enable automatic rotate",      IDC_AUTO_ROTATE,     "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 24, 180, 12
-    CONTROL "Run at Windows startup",      IDC_RUN_AT_STARTUP,  "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 40, 180, 12
-    CONTROL "Show On-Screen Display",      IDC_SHOW_OSD,        "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 56, 180, 12
-    CONTROL "Enable custom shortcuts",     IDC_ENABLE_HOTKEYS,  "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 72, 180, 12
+    // The dialog reads top to bottom: a control only ever disables or hides controls under it, never
+    // one above it. Labels, checkboxes and the status line all start at the same left edge.
+    // This is the dialog at its design size. It can be resized, and on a screen that is not high
+    // enough it opens lower: everything but the three buttons at the bottom then scrolls, and a
+    // wider dialog gives the room to the lists, the slider and the shortcut boxes (the scrolling
+    // part in main.cpp). The size in dialog units is in resource.h, for that code to know it.
+    // Up and down, a row of inputs is only roughed out here. When the dialog opens, every input gets
+    // the height of a dropdown list and every label is put level with the text of the input beside
+    // it (layOutRows in main.cpp), because neither comes out right from dialog units at every scaling.
+    CONTROL "Run at Windows startup",      IDC_RUN_AT_STARTUP,  "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 8, 180, 12
+    // Has a tooltip, so it is no wider than its text needs: the tooltip and the help cursor then
+    // belong to the text and not to empty space after it. The same goes for the sync checkbox below.
+    CONTROL "Enable automatic rotate",      IDC_AUTO_ROTATE,     "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 24, 94, 12
 
-    GROUPBOX "Color preset", -1, 6, 88, 248, 58
-    LTEXT    "", IDC_PRESET_DISPLAY_LABEL, 14, 100, 234, 9
-    COMBOBOX IDC_PRESET_COMBO, 14, 111, 234, 120, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON "Turn off HDR", IDC_HDR_OFF_BTN, 14, 128, 70, 12, NOT WS_VISIBLE
+    // The display that the preset and the brightness slider below belong to. Takes effect at
+    // once, like picking a display in the tray menu.
+    LTEXT    "Display:", -1, 8, 44, 30, 9
+    COMBOBOX IDC_DISPLAY_COMBO, 40, 42, 232, 120, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX "Shortcuts", -1, 6, 152, 248, 72
+    // For HDR only, and above the preset list because HDR is what restricts or disables that list:
+    // a note saying so, next to the button that turns HDR off.
+    PUSHBUTTON "Turn off HDR", IDC_HDR_OFF_BTN, 8, 60, 70, 12, NOT WS_VISIBLE
+    LTEXT    "", IDC_PRESET_NOTE, 84, 62, 188, 9, SS_NOPREFIX | SS_ENDELLIPSIS
 
-    LTEXT   "Increase:", -1, 14, 168, 44, 10
-    CONTROL "", IDC_HOTKEY_UP,   "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 166, 168, 14
+    LTEXT    "Preset:", -1, 8, 78, 30, 9
+    COMBOBOX IDC_PRESET_COMBO, 40, 76, 232, 120, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT   "Decrease:", -1, 14, 188, 44, 10
-    CONTROL "", IDC_HOTKEY_DOWN, "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 70, 186, 168, 14
+    // Brightness. Kept right under the preset: a preset (or HDR) can lock these.
+    // The slider is the control Boot Camp Control Panel uses (range and marks are set in OptionsDlgProc),
+    // with a percent field kept in step with it for typing an exact level.
+    LTEXT   "Brightness:", -1, 8, 98, 60, 9
+    LTEXT   "Dim",    IDC_SLIDER_DIM_LABEL,    8, 114, 16, 9
+    CONTROL "", IDC_BRIGHTNESS_SLIDER, "msctls_trackbar32", TBS_DOWNISLEFT | WS_TABSTOP, 26, 112, 172, 18
+    LTEXT   "Bright", IDC_SLIDER_BRIGHT_LABEL, 201, 114, 24, 9
+    EDITTEXT IDC_SLIDER_PERCENT, 228, 111, 32, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_SLIDER_PERCENT_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 249, 111, 11, 14
+    LTEXT   "%", IDC_SLIDER_PERCENT_UNIT, 263, 114, 9, 9
 
-    LTEXT   "Brightness steps (10-50):", -1, 8, 234, 90, 10
-    EDITTEXT IDC_BRIGHTNESS_STEPS, 100, 232, 32, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
-    CONTROL  "", IDC_BRIGHTNESS_STEPS_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 120, 232, 11, 14
+    // Where a change made with the slider above (or with the tray slider, or the shortcuts) goes:
+    // to every display or to the picked one. Takes effect at once, like the tray menu item of the
+    // same name.
+    CONTROL  "Sync manual brightness across displays", IDC_LINK_DISPLAYS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 136, 144, 12
 
-    PUSHBUTTON     "Reset to Defaults", IDC_RESET_SHORTCUTS, 8, 256, 100, 14
-    DEFPUSHBUTTON  "Save",              IDOK,                148, 256, 48, 14
-    PUSHBUTTON     "Cancel",            IDCANCEL,            202, 256, 48, 14
+    // The ambient light that automatic brightness goes by for the picked display, kept up to date by
+    // OptionsDlgProc: lux, then color temperature and chromaticity when the sensor gives them, then in
+    // brackets where the reading comes from. Shown whether automatic brightness is on or not. The
+    // label has a tooltip, so it is hardly wider than its text. The value has room for six-digit lux
+    // (direct sunlight) with everything else present, and ends in an ellipsis rather than wrap out
+    // of sight if it ever does not fit.
+    LTEXT   "Ambient light:", IDC_AMBIENT_LABEL, 8, 154, 50, 9, SS_NOTIFY
+    LTEXT   "", IDC_AMBIENT_VALUE, 60, 154, 212, 9, SS_NOPREFIX | SS_ENDELLIPSIS
+
+    // Takes effect at once, like the tray menu item: the line and the fields under it follow it.
+    // Has a tooltip, so it is no wider than its text needs, like the two checkboxes above that have one.
+    CONTROL "Enable automatic brightness", IDC_AUTO_BRIGHTNESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 168, 110, 12
+
+    // What automatic brightness is working from; filled in by OptionsDlgProc while it is on. One line:
+    // the dialog's width is set by this line at its longest. A scroll bar takes a little of that
+    // width, so the line ends in an ellipsis rather than wrap out of sight.
+    LTEXT   "", IDC_AUTO_STATUS, 8, 182, 264, 9, SS_NOPREFIX | SS_ENDELLIPSIS
+
+    // The four fields below belong to automatic brightness and are disabled while it is off.
+    // Limits: how far it may go from the level set by hand, in the percent of the slider above.
+    // Hovering either label shows an explanatory tooltip.
+    LTEXT   "Automatic brightening limit (0-100):", IDC_BRIGHTEN_LIMIT_LABEL, 8, 198, 128, 10, SS_NOTIFY
+    EDITTEXT IDC_BRIGHTEN_LIMIT, 138, 196, 40, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_BRIGHTEN_LIMIT_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 167, 196, 11, 14
+    LTEXT   "% above the set level", -1, 182, 198, 90, 10
+
+    LTEXT   "Automatic dimming limit (0-100):", IDC_DIM_LIMIT_LABEL, 8, 216, 128, 10, SS_NOTIFY
+    EDITTEXT IDC_DIM_LIMIT, 138, 214, 40, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_DIM_LIMIT_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 167, 214, 11, 14
+    LTEXT   "% below the set level", -1, 182, 216, 90, 10
+
+    // Ramp times: how long an automatic change takes.
+    LTEXT   "Automatic brightening time (0-60000):", -1, 8, 234, 128, 10
+    EDITTEXT IDC_RAMP_BRIGHTEN, 138, 232, 40, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_RAMP_BRIGHTEN_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY | UDS_NOTHOUSANDS, 167, 232, 11, 14
+    LTEXT   "ms", -1, 182, 234, 20, 10
+
+    LTEXT   "Automatic dimming time (0-60000):", -1, 8, 252, 128, 10
+    EDITTEXT IDC_RAMP_DIM, 138, 250, 40, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_RAMP_DIM_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY | UDS_NOTHOUSANDS, 167, 250, 11, 14
+    LTEXT   "ms", -1, 182, 252, 20, 10
+
+    // Brightness shortcuts. These two apply to the keyboard's own brightness keys as well as to the
+    // custom shortcuts, so they sit above the checkbox that only switches the custom ones.
+    // Hovering the steps label shows an explanatory tooltip.
+    LTEXT   "Steps for native and custom brightness shortcuts (10-50):", IDC_STEPS_LABEL, 8, 274, 184, 10, SS_NOTIFY
+    EDITTEXT IDC_BRIGHTNESS_STEPS, 196, 272, 40, 14, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL  "", IDC_BRIGHTNESS_STEPS_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_AUTOBUDDY, 225, 272, 11, 14
+
+    CONTROL "Show brightness level on screen when using native and custom shortcuts", IDC_SHOW_OSD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 292, 264, 12
+
+    // Kept right above the two shortcuts it switches on and off.
+    CONTROL "Enable custom brightness shortcuts", IDC_ENABLE_HOTKEYS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 308, 180, 12
+
+    LTEXT   "Custom increase brightness shortcut:", -1, 8, 326, 128, 10
+    CONTROL "", IDC_HOTKEY_UP,   "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 138, 324, 134, 14
+
+    LTEXT   "Custom decrease brightness shortcut:", -1, 8, 344, 128, 10
+    CONTROL "", IDC_HOTKEY_DOWN, "msctls_hotkey32", WS_TABSTOP | WS_BORDER, 138, 342, 134, 14
+
+    PUSHBUTTON     "Reset to Defaults", IDC_RESET_SHORTCUTS, 8, 364, 100, 14
+    DEFPUSHBUTTON  "Save",              IDOK,                170, 364, 48, 14
+    PUSHBUTTON     "Cancel",            IDCANCEL,            224, 364, 48, 14
+
+    // For the scrolling part, and placed by it: a scroll bar beside it and a line between it and
+    // the buttons. Both show only while the dialog is too low for everything.
+    SCROLLBAR      IDC_OPTIONS_SCROLL, 270, 0, 10, 360, SBS_VERT | NOT WS_VISIBLE
+    CONTROL        "", IDC_OPTIONS_EDGE, "Static", SS_ETCHEDHORZ | NOT WS_VISIBLE, 0, 360, 280, 1
 END

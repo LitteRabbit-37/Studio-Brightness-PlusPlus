@@ -17,7 +17,7 @@ enum { ID_KEEP = 101, ID_REVERT = 102 };
 void PresetConfirm::UpdateLabel() {
 	if (!m_label) return;
 	wchar_t buf[160];
-	swprintf_s(buf, L"Keep this color preset?   Reverting in %d s...", m_remaining);
+	swprintf_s(buf, L"Keep this preset?   Reverting in %d s...", m_remaining);
 	SetWindowTextW(m_label, buf);
 }
 

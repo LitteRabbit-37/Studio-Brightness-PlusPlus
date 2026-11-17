@@ -16,7 +16,7 @@
 bool HdrAnyAppleDisplayActive();
 
 // Number of Apple monitors currently attached to the desktop. Used to notice a display dropping
-// its signal right after a color-preset switch (the count decreases when the output goes away).
+// its signal right after a preset switch (the count decreases when the output goes away).
 int HdrCountAppleMonitors();
 
 // Ask Windows to turn HDR off on every Apple display target, via DisplayConfigSetDeviceInfo

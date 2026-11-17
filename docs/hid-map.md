@@ -66,7 +66,7 @@ Sensor State, and 0x0850 to 0x0855 for Sensor Event. There is also one Apple ven
 Writing Reporting State is not necessary. `HidD_GetInputReport` answers regardless of the reporting
 state, which is also how Boot Camp reads the sensor.
 
-### Page 0xFF20, Apple vendor, colour presets
+### Page 0xFF20, Apple vendor, presets
 
 This is the Reference Mode surface, fully decoded and in use by the app.
 
@@ -125,7 +125,7 @@ nits. The brightness control is in hundredths of a nit.
 |---|---|---|---|
 | MI_05 | 0xFF00 / 0x0053 | Input report of 26 bytes, no Feature caps | Starts, input read denied |
 | MI_06 col01 | 0xFF00 / 0x000B | Page 0xFF16, usages 0x0003 and 0x0004 | Starts |
-| MI_06 col02 | 0xFF00 / 0x0002 | Page 0xFF20, colour presets, 12 caps | Starts |
+| MI_06 col02 | 0xFF00 / 0x0002 | Page 0xFF20, presets, 12 caps | Starts |
 | MI_06 col03 | 0xFF00 / 0x0047 | Page 0xFF28, 3 caps | Starts |
 | MI_06 col04 | 0xFF00 / 0x003A | Input stream of 2001 bytes, output of 5 | Starts |
 | MI_07 | 0x0080 / 0x0001 | Brightness on 0x0082 / 0x0010, plus 0x000F / 0x0050 | Starts |

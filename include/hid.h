@@ -35,8 +35,8 @@ struct HidCaps {
 	UCHAR  id    = 0;
 };
 
-/* ---------- Color preset (Apple Reference Mode) ---------- */
-struct ColorPreset {
+/* ---------- Preset (Apple Reference Mode) ---------- */
+struct Preset {
 	uint32_t     index;   // hardware index written to 0xFF20/0x03 to select
 	std::wstring name;    // UTF-16 name read from 0xFF20/0x08
 	std::wstring desc;    // UTF-16 secondary string read from 0xFF20/0x09 (Boot Camp reads it too)
@@ -61,12 +61,12 @@ struct DisplayDevice {
 	std::wstring         devicePath;
 	GUID                 containerId = {};
 
-	// Color preset (0xFF20) interface: same physical display, different HID interface
+	// Preset (0xFF20) interface: same physical display, different HID interface
 	HANDLE                   hPreset           = INVALID_HANDLE_VALUE;
 	PHIDP_PREPARSED_DATA     presetPrep        = nullptr;
 	USHORT                   presetReportLen   = 0;
 	long                     presetCursorMax   = 0;
-	std::vector<ColorPreset> presets;
+	std::vector<Preset>      presets;
 	int                      activePresetIndex = -1;
 
 	// Per-device brightness state
@@ -140,15 +140,15 @@ struct DisplayDevice {
 	int   getBrightnessRange(ULONG *mn, ULONG *mx);
 	bool  isOpen() const { return hDev != INVALID_HANDLE_VALUE; }
 
-	// Color presets (0xFF20 interface)
+	// Presets (0xFF20 interface)
 	bool  hasPresets() const { return hPreset != INVALID_HANDLE_VALUE && !presets.empty(); }
 	int   enumeratePresets();
 	int   getActivePreset(int *outIdx);
 	int   setActivePreset(int idx);
 
-	// Name-based preset classification (see ColorPreset). All of these fail open: when the
+	// Name-based preset classification (see Preset). All of these fail open: when the
 	// naming scheme is unknown, nothing gets locked or filtered.
-	const ColorPreset *activePreset() const;          // nullptr when unknown
+	const Preset *activePreset() const;          // nullptr when unknown
 	bool  presetsClassifiable() const;                // any preset matches the known Apple naming
 	bool  activePresetLocksBrightness() const;        // macOS parity: reference modes fix brightness
 	int   firstHdrCompatiblePreset() const;           // rescue target when HDR turns on (-1 = none)

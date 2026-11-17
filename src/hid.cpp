@@ -132,7 +132,7 @@ int DisplayDevice::getBrightnessRange(ULONG *mn, ULONG *mx) {
 	return -2;
 }
 
-/* ---------- Color presets (0xFF20 vendor interface) ---------- */
+/* ---------- Presets (0xFF20 vendor interface) ---------- */
 static bool presetHasFeatureUsage(PHIDP_PREPARSED_DATA prep, USAGE page, USAGE usage, long *logMax,
                                   UCHAR *reportId = nullptr) {
 	HIDP_CAPS caps{};
@@ -247,7 +247,7 @@ int DisplayDevice::enumeratePresets() {
 	return 0;
 }
 
-const ColorPreset *DisplayDevice::activePreset() const {
+const Preset *DisplayDevice::activePreset() const {
 	if (activePresetIndex < 0)
 		return nullptr;
 	for (const auto &p : presets)
@@ -266,7 +266,7 @@ bool DisplayDevice::presetsClassifiable() const {
 bool DisplayDevice::activePresetLocksBrightness() const {
 	if (!presetsClassifiable())
 		return false; // unknown naming scheme: never lock controls on a guess
-	const ColorPreset *p = activePreset();
+	const Preset *p = activePreset();
 	return p && !p->allowsBrightness();
 }
 
@@ -319,7 +319,7 @@ std::vector<DisplayDevice> hid_enumerate() {
 	std::vector<Candidate> candidates;
 	std::vector<DisplayDevice> result;
 
-	// 0xFF20 color-preset interfaces (same display as brightness, matched later by ContainerId)
+	// 0xFF20 preset interfaces (same display as brightness, matched later by ContainerId)
 	struct PresetIface {
 		std::wstring         path;
 		GUID                 containerId{};
@@ -432,7 +432,7 @@ std::vector<DisplayDevice> hid_enumerate() {
 			          vc.LogicalMin, vc.LogicalMax);
 		}
 
-		// Divert the 0xFF20 vendor (color preset) interface: same display, no brightness cap.
+		// Divert the 0xFF20 vendor (preset) interface: same display, no brightness cap.
 		// Capture it here before the brightness-cap check would drop it; attach by ContainerId later.
 		bool isPresetIface = false;
 		for (USHORT vi = 0; vi < numFeatVals; ++vi)
@@ -449,7 +449,7 @@ std::vector<DisplayDevice> hid_enumerate() {
 			pf.containerId = queryContainerId(set, &devInfo);
 			dev.hDev = INVALID_HANDLE_VALUE; // transfer ownership; keep dev.close() from freeing them
 			dev.prep = nullptr;
-			Log::Info(L"  FF20 color-preset interface (PID 0x%04X), deferring for ContainerId attach", pid);
+			Log::Info(L"  FF20 preset interface (PID 0x%04X), deferring for ContainerId attach", pid);
 			presetIfaces.push_back(std::move(pf));
 			continue;
 		}

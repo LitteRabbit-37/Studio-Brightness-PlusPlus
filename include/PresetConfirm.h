@@ -2,7 +2,7 @@
 #include <windows.h>
 #include <functional>
 
-// A small top-most "keep this color preset?" prompt with a countdown and Keep / Revert now buttons.
+// A small top-most "keep this preset?" prompt with a countdown and Keep / Revert now buttons.
 // onRevert() runs on timeout, on "Revert now", or if the window is closed; "Keep" runs nothing.
 //
 // The auto-revert is the safety net: it fires even if the display went blank on the preset switch

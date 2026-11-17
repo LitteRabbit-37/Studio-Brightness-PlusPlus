@@ -31,11 +31,45 @@
 #define IDC_RESET_SHORTCUTS       1201
 #define IDC_BRIGHTNESS_STEPS      1301
 #define IDC_BRIGHTNESS_STEPS_SPIN 1302
+#define IDC_RAMP_BRIGHTEN         1303
+#define IDC_RAMP_BRIGHTEN_SPIN    1304
+#define IDC_RAMP_DIM              1305
+#define IDC_RAMP_DIM_SPIN         1306
+#define IDC_STEPS_LABEL           1307
+#define IDC_AUTO_STATUS           1308
+#define IDC_BRIGHTEN_LIMIT        1309
+#define IDC_BRIGHTEN_LIMIT_SPIN   1310
+#define IDC_BRIGHTEN_LIMIT_LABEL  1311
+#define IDC_DIM_LIMIT             1312
+#define IDC_DIM_LIMIT_SPIN        1313
+#define IDC_DIM_LIMIT_LABEL       1314
 
-// Color preset (Options Dialog)
-#define IDC_PRESET_DISPLAY_LABEL  1401
+// Preset (Options Dialog)
+#define IDC_PRESET_NOTE           1401
 #define IDC_PRESET_COMBO          1402
 #define IDC_HDR_OFF_BTN           1403
+
+// Brightness slider (Options Dialog)
+#define IDC_BRIGHTNESS_SLIDER     1501
+#define IDC_SLIDER_DIM_LABEL      1502
+#define IDC_SLIDER_BRIGHT_LABEL   1503
+#define IDC_SLIDER_PERCENT        1504
+#define IDC_SLIDER_PERCENT_SPIN   1505
+#define IDC_SLIDER_PERCENT_UNIT   1506
+
+// Displays (Options Dialog)
+#define IDC_DISPLAY_COMBO         1601
+#define IDC_LINK_DISPLAYS         1602
+
+// Ambient light (Options Dialog)
+#define IDC_AMBIENT_LABEL         1701
+#define IDC_AMBIENT_VALUE         1702
+
+// Options dialog: its size in dialog units, and what its scrolling part needs
+#define OPTIONS_DLG_W             280
+#define OPTIONS_DLG_H             386
+#define IDC_OPTIONS_SCROLL        1801
+#define IDC_OPTIONS_EDGE          1802
 
 // Hotkey IDs
 #define ID_HOTKEY_UP   4001
