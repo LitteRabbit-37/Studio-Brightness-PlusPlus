@@ -1,7 +1,7 @@
 # SbppMonFilter - Windows brightness for the Apple Studio Display
 
 **Status: experimental, test-signed.** An optional kernel filter driver. The
-app does not install or need it; without it the app works exactly as before.
+app does not install or need it, and works normally without it.
 
 With it, Windows treats the Studio Display like a laptop panel:
 
@@ -48,8 +48,9 @@ starts. After a first install the slider shows greyed out until DES restarts;
 `install-dev.ps1` restarts it for you. From then on DES picks the display up
 again across monitor reconnects on its own.
 
-DES also applies the power plan's **dim display after** setting to the display
-now, and re-applies its brightness on resume and display-on.
+With the driver in place, DES also applies the power plan's **dim display
+after** setting to the display, and re-applies its brightness on resume and
+display-on.
 
 ## Design
 
@@ -81,6 +82,18 @@ Settings / Quick Settings          Logi Options+, scripts      legacy \\.\LCD
   recognises that echo and acknowledges without re-applying, which would
   otherwise re-anchor auto-brightness. A request from Windows cancels any local
   change still settling.
+- **Requests the service drops.** `WmiSetBrightness` (and a power-plan write)
+  changes the plan's *Display brightness* setting, and the Display Enhancement
+  Service applies the change - unless the value equals one it applied itself in
+  the last 1-3 s, which it takes for the echo of its own write and drops
+  (`des.dll`, the power-setting callback in the manual brightness manager).
+  Reversing direction with brightness keys hits exactly that: 42 -> 32 -> 42
+  loses the second 42, and Windows then reports a level the panel is not at.
+  Laptop Fn keys and the Settings slider reach the service by other routes, so
+  it is not seen there. The plan setting itself always changes, so the app also
+  watches it (`PowerSettingRegisterNotification`) and applies what the service
+  dropped; when the service does apply a request, the driver's `_BCM` and the
+  plan change carry the same level and the second is a no-op.
 - **Monitor reconnects.** The filter fails the app's pended wait when its
   monitor goes away, so the app reconnects; the new filter instance retries
   creating `\\.\SbppBridge` until the old one's name is free. The app is back
@@ -140,11 +153,12 @@ power and display providers, for working out what Windows asked and when.
 Studio Display (2022), Windows 11 26300, NVIDIA RTX 3080 over a Thunderbolt
 add-in card:
 
-- Settings slider moved the panel step by step; Quick Settings uses the same path.
+- The Settings and Quick Settings sliders drive the panel, fast drags included.
 - `WmiSetBrightness` and the legacy `\\.\LCD` set each produced one `_BCM`,
   applied by the app; Windows' level matched afterwards.
 - Logi Options+ MX Keys brightness keys: +-10 per press, ~216 ms repeat while
-  held, no lost or rewound steps.
+  held, fast direction reversals included - every press reached the panel in
+  order (71 requests in one run).
 - App-side changes (shortcuts, an auto-brightness ramp) reached Windows as one
   settled level; the echo was not re-applied.
 - Monitor devnode restarts with the app connected: the app reconnected in about

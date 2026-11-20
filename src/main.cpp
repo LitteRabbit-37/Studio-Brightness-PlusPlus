@@ -38,6 +38,7 @@
 #include "PresetConfirm.h"
 #include "orientation.h"
 #include "als.h"
+#include "BrightnessBridge.h"
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "sensorsapi.lib")
@@ -59,6 +60,7 @@ constexpr wchar_t kAppVersion[] = SBPP_VERSION_STR;
 
 // Update state, filled by the background update-check thread.
 constexpr UINT     WMAPP_UPDATE_READY = WM_APP + 2;
+constexpr UINT     WMAPP_BRIDGE_SET   = WM_APP + 3;   // level requested through Windows (BrightnessBridge)
 constexpr UINT_PTR ID_UPDATE_TIMER    = 0xA001;
 constexpr UINT_PTR ID_HDR_TIMER       = 0xA002;
 constexpr UINT_PTR ID_REAPPLY_TIMER   = 0xA003;
@@ -528,6 +530,38 @@ static ULONG mapLuxToBrightness(float lux, const DisplayDevice &dev) {
 	return static_cast<ULONG>(std::clamp(tgt, (float)dev.minBrightness, (float)dev.maxBrightness));
 }
 
+/* ---------- Windows brightness API bridge (driver/SbppMonFilter) ---------- */
+// Windows' brightness stack speaks percent. The app's own percent, as the tray slider shows it,
+// is linear over the device range, so the bridge uses the same: Windows' sliders, the tray
+// slider and the OSD agree, and percent -> raw -> percent round-trips exactly.
+static int brightnessToPercent(const DisplayDevice &d) {
+	if (d.maxBrightness <= d.minBrightness || d.currentBrightness <= d.minBrightness) return 0;
+	double p = (double)(d.currentBrightness - d.minBrightness) * 100.0 /
+	           (double)(d.maxBrightness - d.minBrightness);
+	return (int)std::lround(std::clamp(p, 0.0, 100.0));
+}
+
+static ULONG percentToBrightness(const DisplayDevice &d, int pct) {
+	if (d.maxBrightness <= d.minBrightness) return d.currentBrightness;
+	pct = std::clamp(pct, 0, 100);
+	return d.minBrightness + (ULONG)std::llround((double)(d.maxBrightness - d.minBrightness) * pct / 100.0);
+}
+
+// True while a level requested through Windows is being applied (guarded by g_displayMutex):
+// that change came from Windows, so it is not reported back to Windows as a local one.
+static bool g_applyingBridgeRequest = false;
+
+// Caller holds g_displayMutex. Only the active display is reported: the driver exposes one
+// brightness, the one the tray slider shows.
+static void reportBridgeLevel(const DisplayDevice &dev) {
+	if (g_displays.empty()) return;
+	ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+	if (&g_displays[idx] != &dev) return;
+	int pct = brightnessToPercent(dev);
+	Bridge::ReportLevel(pct, !g_hdrActive.load() && !dev.activePresetLocksBrightness());
+	if (!g_applyingBridgeRequest) Bridge::NoteLocalChange(pct);   // keep Windows' slider true
+}
+
 /* ---------- Central Brightness Setter ---------- */
 static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool showOSD) {
 	if (g_hdrActive.load()) return;   // brightness writes are no-ops under HDR; Windows owns it
@@ -540,6 +574,7 @@ static void SetBrightness(DisplayDevice &dev, ULONG val, bool isUserAction, bool
 			return;
 		}
 		dev.currentBrightness = safeVal;
+		reportBridgeLevel(dev);
 
 		if (isUserAction) {
 			dev.baseBrightness = safeVal;
@@ -904,6 +939,36 @@ static std::wstring buildDisplayStatusLine() {
 	return line;
 }
 
+/* ---------- Windows brightness API request (BrightnessBridge) ---------- */
+// A level set through Windows - its brightness sliders, or a WMI caller such as Logi Options+.
+// Relayed by the SbppMonFilter driver (seq > 0), or picked up from the power plan's brightness
+// setting when Windows dropped it before it reached the driver (seq 0, see BrightnessBridge.cpp).
+// Applied exactly like a hotkey step, then always reported back, so the driver hands Windows the
+// panel's real level even when the write was refused (HDR, locked colour preset) or clamped.
+static void onBridgeRequest(int pct, unsigned long seq) {
+	std::lock_guard<std::mutex> lock(g_displayMutex);
+	if (g_displays.empty()) {
+		Bridge::MarkApplied(seq);   // nothing to apply; let the next display report be taken
+		return;
+	}
+	ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+	auto &ref = g_displays[idx];
+	g_applyingBridgeRequest = true;
+	// An echo of a level we told Windows, or a level the panel is already at: acknowledge
+	// only. Re-applying would round to a percent step and re-anchor auto-brightness as if
+	// the user had moved it.
+	if (!Bridge::IsSyncEcho(pct) && pct != brightnessToPercent(ref)) {
+		ULONG val = percentToBrightness(ref, pct);
+		if (g_settings.linkedMode || g_displays.size() == 1)
+			SetBrightnessLinked(val, ref, true, true);
+		else
+			SetBrightness(ref, val, true, true);
+	}
+	Bridge::MarkApplied(seq);
+	reportBridgeLevel(ref);
+	g_applyingBridgeRequest = false;
+}
+
 /* ---------- hidden window & WndProc ---------- */
 // A panel takes a moment to light up after Windows turns it on, so reapply 3 s and 6 s later
 // rather than once right away. A new event restarts the count.
@@ -916,6 +981,10 @@ static void scheduleReapply(HWND h) {
 LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 	if (g_wmTaskbarCreated && m == g_wmTaskbarCreated) {
 		AddNotificationIcon(h);
+		return 0;
+	}
+	if (m == WMAPP_BRIDGE_SET) {
+		onBridgeRequest((int)wParam, (unsigned long)lParam);
 		return 0;
 	}
 	if (m == WM_DISPLAYCHANGE) {
@@ -1146,6 +1215,7 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 		}
 	}
 	if (m == WM_DESTROY) {
+		Bridge::Stop();   // before the displays go: it reports their levels
 		cleanupAlsSensors();
 		{
 			std::lock_guard<std::mutex> lock(g_displayMutex);
@@ -1319,8 +1389,13 @@ void startWorker() {
 					}
 
 					// At launch or after a reconnect, the panels may not show what they report.
-					if (added)
+					// Then hand the bridge the active display's level: ReapplyBrightness writes
+					// the panel directly, so nothing else reports it until the next change.
+					if (added) {
 						ReapplyBrightness(L"display found");
+						ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+						reportBridgeLevel(g_displays[idx]);
+					}
 				}
 
 				// Displays powered back on (sleep, monitor standby) or reconfigured: same reason.
@@ -1455,6 +1530,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 	als_watch_init();                           // discover Apple raw-HID ALS (MI_08 illuminance)
 	startSensorThread();                        // poll both off the UI thread
 	startWorker();
+	Bridge::Start(h, WMAPP_BRIDGE_SET);         // optional SbppMonFilter driver: Windows brightness API
 
 	// Check for updates shortly after launch, then once a day.
 	SetTimer(h, ID_UPDATE_TIMER, 24 * 60 * 60 * 1000, nullptr);
