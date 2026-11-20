@@ -1,0 +1,89 @@
+;
+; SbppMonFilter.inf
+;
+; Extension INF for the Apple Studio Display monitor devnode (MONITOR\APPAE3A).
+; monitor.inf stays the function driver. This package:
+;   - adds the SbppMonFilter KMDF lower filter, below monitor.sys, and
+;   - sets BrightnessControl = 3 in the monitor's software key, which makes the
+;     display the system's brightness target, controlled through ACPI; the
+;     filter answers the ACPI brightness methods monitor.sys then evaluates.
+; Removing it (driver\uninstall-dev.ps1) puts the device back as it was.
+;
+; Test-signed: loads only while Windows test-signing mode is on.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Extension
+ClassGuid   = {e2f84ce7-8efa-411c-aa69-97454ca4cb57}
+ExtensionId = {77c15e03-5d09-4cc0-8e43-0e05157ce5e4}
+Provider    = %ProviderName%
+CatalogFile = SbppMonFilter.cat
+DriverVer   = 11/20/2026,0.4.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+; 10.0.18362 (1903): [DDInstall.Filters] / AddFilter. Also covers DIRID 13 (16299).
+%MfgName% = SbppMon, NTamd64.10.0...18362
+
+[SbppMon.NTamd64.10.0...18362]
+%DeviceDesc% = SbppMon_Install, MONITOR\APPAE3A
+
+[SbppMon_Install.NT]
+CopyFiles = SbppMon_CopyFiles
+AddReg    = SbppMon_SW_AddReg
+
+[SbppMon_SW_AddReg]
+; monitor.sys "BrightnessControl": bit 0 = this external-connector display is
+; the brightness target, bit 1 = control it through ACPI. Meant for PCs without
+; a built-in display; on a laptop it would compete with the internal panel.
+HKR,,BrightnessControl,0x00010001,3
+
+; PnP-managed filter registration, so removing the package removes the filter.
+[SbppMon_Install.NT.Filters]
+AddFilter = SbppMonFilter,,SbppMon_Filter
+
+[SbppMon_Filter]
+; Below monitor.sys: it sends its ACPI method evaluations down its own stack.
+FilterPosition = Lower
+
+[SbppMon_Install.NT.Services]
+; Flags 0: a filter, not the device's function driver.
+AddService = SbppMonFilter,,SbppMon_Service
+
+[SbppMon_Service]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\SbppMonFilter.sys
+AddReg        = SbppMon_Service_AddReg
+
+[SbppMon_Service_AddReg]
+; Parameters key for the driver's status snapshot (FLG_ADDREG_KEYONLY).
+HKR,"Parameters",,0x00000010
+
+[SbppMon_Install.NT.Wdf]
+KmdfService = SbppMonFilter, SbppMon_WdfSect
+
+[SbppMon_WdfSect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[SbppMon_CopyFiles]
+SbppMonFilter.sys
+
+[DestinationDirs]
+SbppMon_CopyFiles = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+SbppMonFilter.sys = 1,,
+
+[Strings]
+ProviderName = "Studio Brightness++"
+MfgName      = "Studio Brightness++"
+DeviceDesc   = "Studio Display brightness filter"
+ServiceDesc  = "SbppMonFilter - Studio Display brightness filter"
+DiskName     = "SbppMonFilter package"

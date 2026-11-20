@@ -135,6 +135,12 @@ That community package is not bundled with or recommended by this app yet. Its c
 
 Once a sensor driver is in place the app picks it up on its own: ambient light moves from the Sensor API to the display's sensor, and "Automatic Rotate" starts working. Rotation only ever reacts to a physical move of the panel; the app never changes your orientation at startup. Everything known about the interfaces is in `docs/hid-map.md`, and `tools/hidprobe` is the read-only diagnostic used to map them, attached to each release as `hid_probe.exe`.
 
+## Windows brightness controls (experimental)
+
+Windows reports the Studio Display as having no brightness control. So the Settings and Quick Settings brightness sliders are missing, and anything that changes brightness through Windows' brightness API does nothing; for example the brightness keys on Logi MX Keys keyboards, which Logi Options+ maps to that API. `driver/` holds an optional kernel filter, SbppMonFilter, that makes Windows treat the display like a laptop panel and hands every brightness it sets to the app, which applies it as usual. The app keeps Windows' slider in step with its own changes.
+
+It is **not bundled or installed by the app**, and is for people comfortable building and test-signing a driver: until it is properly signed it loads only with Windows test-signing mode on. The app works normally without it. See [`driver/README.md`](driver/README.md).
+
 ## Building
 
 ### Prerequisites

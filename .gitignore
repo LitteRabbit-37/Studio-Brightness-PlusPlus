@@ -39,3 +39,7 @@ bin/
 
 # Generated at build time from the git tag (tools/gen-version.ps1)
 include/version.h
+
+# Driver build output and the exported test certificate (driver/build-driver.ps1)
+driver/out/
+driver/SbppMonFilter/x64/
