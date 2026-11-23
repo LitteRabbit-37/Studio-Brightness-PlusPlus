@@ -184,6 +184,11 @@ static bool registerHotkeys(HWND h) {
 /* ---------- prototypes ---------- */
 INT_PTR CALLBACK OptionsDlgProc(HWND, UINT, WPARAM, LPARAM);
 
+// The Options window while it is open. The tray menu stays usable while it is (the shell posts
+// the icon's messages, and a disabled owner still gets those), so this keeps it to one window
+// and lets the tray toggles update its checkboxes (#31).
+static HWND g_optionsDlg = nullptr;
+
 /* ---------- systray helpers ---------- */
 BOOL AddNotificationIcon(HWND h) {
 	NOTIFYICONDATA nid{sizeof(nid)};
@@ -671,8 +676,12 @@ static void getDlgHotkey(HWND d, int ctrlId, HotkeySpec &out) {
 
 INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 	UNREFERENCED_PARAMETER(lp);
+	// The display the preset combo was filled for. The active display can change from the tray
+	// menu while Options is open, so Save looks the display up by this, not by the active index.
+	static GUID s_presetDisplay = {};
 	switch (msg) {
 	case WM_INITDIALOG: {
+		g_optionsDlg = d;
 		CheckDlgButton(d, IDC_AUTO_BRIGHTNESS, g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(d, IDC_AUTO_ROTATE, g_settings.autoRotateEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 		// Snapshot the active display's preset state once; the combo fill, the control
@@ -683,10 +692,12 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		int  active         = -1;
 		bool have           = false;
 		bool lockBrightness = false;
+		s_presetDisplay     = {};
 		{
 			std::lock_guard<std::mutex> lock(g_displayMutex);
 			if (!g_displays.empty()) {
 				ULONG idx      = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
+				s_presetDisplay = g_displays[idx].containerId;
 				dispName       = g_displays[idx].name;
 				presetsCopy    = g_displays[idx].presets;
 				active         = g_displays[idx].activePresetIndex;
@@ -837,9 +848,9 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 					bool switched = false;
 					{
 						std::lock_guard<std::mutex> lock(g_displayMutex);
-						if (!g_displays.empty()) {
-							ULONG idx = std::min((ULONG)(g_displays.size() - 1), g_settings.activeDisplayIndex);
-							auto &dev = g_displays[idx];
+						for (auto &dev : g_displays) {
+							if (!IsEqualGUID(dev.containerId, s_presetDisplay))
+								continue;
 							if (dev.hPreset != INVALID_HANDLE_VALUE && hwIdx != dev.activePresetIndex) {
 								prevIdx = dev.activePresetIndex;
 								// Log the intent BEFORE the write (the file log flushes per line):
@@ -859,6 +870,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 									Log::Warn(L"Preset switch failed on %s", dev.name.c_str());
 								}
 							}
+							break;
 						}
 					}
 					if (switched) {
@@ -877,6 +889,9 @@ INT_PTR CALLBACK OptionsDlgProc(HWND d, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		break;
 	}
+	case WM_DESTROY:
+		g_optionsDlg = nullptr;
+		break;
 	}
 	return FALSE;
 }
@@ -1115,10 +1130,16 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 			if (cmd == IDM_TOGGLE_AUTO) {
 				g_settings.autoAdjustEnabled.store(!g_settings.autoAdjustEnabled.load());
 				g_settings.Save();
+				if (g_optionsDlg) // or its Save would write the old state back
+					CheckDlgButton(g_optionsDlg, IDC_AUTO_BRIGHTNESS,
+					               g_settings.autoAdjustEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 			} else if (cmd == IDM_TOGGLE_ROTATE) {
 				g_settings.autoRotateEnabled.store(!g_settings.autoRotateEnabled.load());
 				g_settings.Save();
 				orient_set_enabled(g_settings.autoRotateEnabled.load());
+				if (g_optionsDlg)
+					CheckDlgButton(g_optionsDlg, IDC_AUTO_ROTATE,
+					               g_settings.autoRotateEnabled.load() ? BST_CHECKED : BST_UNCHECKED);
 			} else if (cmd == IDM_LINKED_MODE) {
 				g_settings.linkedMode = !g_settings.linkedMode;
 				g_settings.Save();
@@ -1126,7 +1147,10 @@ LRESULT CALLBACK HiddenWndProc(HWND h, UINT m, WPARAM wParam, LPARAM lParam) {
 				g_settings.activeDisplayIndex = (ULONG)(cmd - IDM_SELECT_DISPLAY);
 				g_settings.Save();
 			} else if (cmd == IDM_OPTIONS) {
-				DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
+				if (g_optionsDlg)
+					SetForegroundWindow(g_optionsDlg);
+				else
+					DialogBoxParamW(g_hInst, MAKEINTRESOURCE(IDD_OPTIONS), h, OptionsDlgProc, 0);
 			} else if (cmd == IDM_SHOW_LOGS) {
 				LogWindow::Show();
 			} else if (cmd == IDM_CHECK_UPDATE) {
