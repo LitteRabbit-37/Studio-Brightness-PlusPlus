@@ -1,6 +1,7 @@
 #include "PresetConfirm.h"
 #include "HdrMonitor.h"
 #include "Dpi.h"
+#include "Log.h"
 #include <cstdio>
 
 HWND  PresetConfirm::hWnd = nullptr;
@@ -8,10 +9,15 @@ HWND  PresetConfirm::m_label = nullptr;
 HFONT PresetConfirm::m_font = nullptr;
 int   PresetConfirm::m_remaining = 0;
 int   PresetConfirm::m_appleMonitors = 0;
+int   PresetConfirm::m_missingTicks = 0;
 std::function<void()> PresetConfirm::m_onRevert = nullptr;
 
 static const wchar_t *kClass   = L"StudioBrightnessPresetConfirm";
 static const UINT_PTR kTimerId = 1;
+// A switch can make the display drop out for a moment and come back: the Studio Display
+// (Gen 2) does it on every preset change (#29). Only a display still gone after this many
+// seconds counts as a blanked panel; the countdown covers everything else.
+static const int kMissingTicksToRevert = 5;
 enum { ID_KEEP = 101, ID_REVERT = 102 };
 
 void PresetConfirm::UpdateLabel() {
@@ -28,6 +34,7 @@ void PresetConfirm::Show(HINSTANCE hInst, int seconds, std::function<void()> onR
 	m_onRevert      = std::move(onRevert);
 	m_remaining     = seconds;
 	m_appleMonitors = HdrCountAppleMonitors();
+	m_missingTicks  = 0;
 
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc   = WndProc;
@@ -125,13 +132,21 @@ LRESULT CALLBACK PresetConfirm::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 	switch (m) {
 	case WM_TIMER:
 		if (w == kTimerId) {
-			// If an Apple monitor vanished since the switch, the preset blanked the panel:
-			// revert right away instead of sitting out the countdown on a black screen.
+			// If an Apple monitor vanished since the switch and stays gone, the preset blanked
+			// the panel: revert early instead of sitting out the countdown on a black screen.
 			if (m_appleMonitors > 0 && HdrCountAppleMonitors() < m_appleMonitors) {
-				auto cb = m_onRevert; m_onRevert = nullptr;
-				DestroyWindow(h);
-				if (cb) cb();
-				return 0;
+				if (++m_missingTicks == 1)
+					Log::Info(L"Apple display dropped out after the preset switch, waiting for it");
+				if (m_missingTicks >= kMissingTicksToRevert) {
+					Log::Info(L"Apple display still gone after %d s, reverting the preset", m_missingTicks);
+					auto cb = m_onRevert; m_onRevert = nullptr;
+					DestroyWindow(h);
+					if (cb) cb();
+					return 0;
+				}
+			} else if (m_missingTicks > 0) {
+				Log::Info(L"Apple display back after %d s", m_missingTicks);
+				m_missingTicks = 0;
 			}
 			if (--m_remaining <= 0) {
 				auto cb = m_onRevert; m_onRevert = nullptr;

@@ -23,6 +23,7 @@ private:
 	static HWND  m_label;
 	static HFONT m_font;
 	static int   m_remaining;
-	static int   m_appleMonitors; // Apple monitor count at Show(); a drop means the panel blanked
+	static int   m_appleMonitors; // Apple monitor count at Show(); a lasting drop means the panel blanked
+	static int   m_missingTicks;  // consecutive 1 s ticks with fewer Apple monitors than at Show()
 	static std::function<void()> m_onRevert;
 };
